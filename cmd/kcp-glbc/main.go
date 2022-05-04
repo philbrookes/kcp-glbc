@@ -3,6 +3,10 @@ package main
 import (
 	"context"
 	"flag"
+	certmanclient "github.com/jetstack/cert-manager/pkg/client/clientset/versioned"
+	certmanv1client "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/certmanager/v1"
+	certmaninformer "github.com/jetstack/cert-manager/pkg/client/informers/externalversions"
+	"github.com/kuadrant/kcp-glbc/pkg/reconciler/certificate"
 	"sync"
 	"time"
 
@@ -16,8 +20,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
-
-	certmanclient "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/certmanager/v1"
 
 	"github.com/kcp-dev/apimachinery/pkg/logicalcluster"
 
@@ -129,7 +131,7 @@ func main() {
 
 		certProvider, err = tls.NewCertManager(tls.CertManagerConfig{
 			DNSValidator:  tls.DNSValidatorRoute53,
-			CertClient:    certmanclient.NewForConfigOrDie(glbcClientConfig),
+			CertClient:    certmanv1client.NewForConfigOrDie(glbcClientConfig),
 			CertProvider:  tlsCertProvider,
 			Region:        *region,
 			K8sClient:     glbcKubeClient,
@@ -159,10 +161,14 @@ func main() {
 		klog.Fatal(err)
 	}
 
+	certInformer := certmaninformer.NewSharedInformerFactoryWithOptions(certmanclient.NewForConfigOrDie(glbcClientConfig), 60*time.Second)
+
 	ingressController := ingress.NewController(&ingress.ControllerConfig{
 		KubeClient:            kcpKubeClient,
+		CertClient:            certmanv1client.NewForConfigOrDie(glbcClientConfig),
 		DnsRecordClient:       kcpDnsRecordClient,
 		SharedInformerFactory: kcpKubeInformerFactory,
+		CertInformer:          certInformer,
 		Domain:                domain,
 		CertProvider:          certProvider,
 		HostResolver:          net.NewDefaultHostResolver(),
@@ -199,6 +205,19 @@ func main() {
 		klog.Fatal(err)
 	}
 
+	certificateController, err := certificate.NewController(&certificate.ControllerConfig{
+		CoreClient:   kcpKubeClient,
+		CertClient:   certmanv1client.NewForConfigOrDie(glbcClientConfig),
+		CertManager:  certProvider,
+		CertInformer: certInformer,
+	})
+	if err != nil {
+		klog.Fatal(err)
+	}
+
+	certInformer.Start(ctx.Done())
+	certInformer.WaitForCacheSync(ctx.Done())
+
 	kcpKubeInformerFactory.Start(ctx.Done())
 	kcpKubeInformerFactory.WaitForCacheSync(ctx.Done())
 
@@ -228,6 +247,7 @@ func main() {
 	}
 	start(gCtx, serviceController)
 	start(gCtx, deploymentController)
+	start(gCtx, certificateController)
 
 	g.Go(func() error {
 		// wait until the controllers have return before stopping serving metrics

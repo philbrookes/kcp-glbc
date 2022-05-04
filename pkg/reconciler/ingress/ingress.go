@@ -3,15 +3,20 @@ package ingress
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	certmanv1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
+	"github.com/kuadrant/kcp-glbc/pkg/reconciler/certificate"
+	"github.com/kuadrant/kcp-glbc/pkg/util/env"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"strconv"
 	"strings"
 
 	"github.com/rs/xid"
 
+	kuadrantcluster "github.com/kuadrant/kcp-glbc/pkg/cluster"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
@@ -30,7 +35,14 @@ import (
 const (
 	manager                 = "kcp-ingress"
 	cascadeCleanupFinalizer = "kcp.dev/cascade-cleanup"
+	RequestTimeout          = int64(180)
+	RequestStatusAnnotation = "kuadrant.dev/certificate-request-status"
+	StatusReady             = Status("Certificate is ready")
+	StatusPending           = Status("Certificate is pending")
+	StatusDelayed           = Status("Certificate is taking longer than expected")
 )
+
+type Status string
 
 func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingress) error {
 	// is deleting
@@ -88,6 +100,31 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 		return err
 	}
 
+	if err := c.updateCertificateStatus(ctx, ingress); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Controller) updateCertificateStatus(ctx context.Context, rootIngress *networkingv1.Ingress) error {
+
+	mapper, err := kuadrantcluster.NewControlObjectMapper(rootIngress)
+	if err != nil {
+		return err
+	}
+	cert, err := c.certClient.Certificates(env.GetEnvString("NAMESPACE", "cert-manager")).Get(ctx, mapper.Name(), metav1.GetOptions{})
+	if err != nil {
+		return errors.New(fmt.Sprintf("error getting certificate %v/%v for ingress: %v", mapper.Namespace(), mapper.Name(), rootIngress.Name))
+	}
+	if certificate.IsReady(cert) {
+		metadata.AddAnnotation(rootIngress, RequestStatusAnnotation, string(StatusReady), true)
+		return nil
+	}
+	if certificate.PendingTime(cert) <= RequestTimeout {
+		metadata.AddAnnotation(rootIngress, RequestStatusAnnotation, string(StatusPending), true)
+		return nil
+	}
+	metadata.AddAnnotation(rootIngress, RequestStatusAnnotation, string(StatusDelayed), true)
 	return nil
 }
 
@@ -109,7 +146,7 @@ func (c *Controller) ensureCertificate(ctx context.Context, rootIngress *network
 		return nil
 	}
 	err = c.certProvider.Create(ctx, controlClusterContext)
-	if err != nil && !errors.IsAlreadyExists(err) {
+	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
 	}
 
@@ -127,7 +164,7 @@ func (c *Controller) ensureDNS(ctx context.Context, ingress *networkingv1.Ingres
 	if ingress.DeletionTimestamp != nil && !ingress.DeletionTimestamp.IsZero() {
 		// delete DNSRecord
 		err := c.dnsRecordClient.Cluster(logicalcluster.From(ingress)).KuadrantV1().DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
-		if err != nil && !errors.IsNotFound(err) {
+		if err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 		return nil
@@ -154,7 +191,7 @@ func (c *Controller) ensureDNS(ctx context.Context, ingress *networkingv1.Ingres
 		// Attempt to retrieve the existing DNSRecord for this Ingress
 		existing, err := c.dnsRecordClient.Cluster(logicalcluster.From(ingress)).KuadrantV1().DNSRecords(ingress.Namespace).Get(ctx, ingress.Name, metav1.GetOptions{})
 		// If it doesn't exist, create it
-		if err != nil && errors.IsNotFound(err) {
+		if err != nil && apierrors.IsNotFound(err) {
 			// Create the DNSRecord object
 			record := &v1.DNSRecord{}
 			if err := c.setDnsRecordFromIngress(ctx, ingress, record); err != nil {
@@ -298,7 +335,7 @@ func (c *Controller) getServices(ctx context.Context, ingress *networkingv1.Ingr
 			if err == nil {
 				c.tracker.add(ingress, service)
 				services = append(services, service)
-			} else if !errors.IsNotFound(err) {
+			} else if !apierrors.IsNotFound(err) {
 				return nil, err
 			} else {
 				// ignore service not found errors
@@ -392,4 +429,28 @@ func awsEndpointWeight(numIPs int) string {
 		numIPs = maxWeight
 	}
 	return strconv.Itoa(maxWeight / numIPs)
+}
+
+func selectorFromCertificate(certificate *certmanv1.Certificate) (*metadata.WorkspaceNamespaceName, error) {
+	ingressWorkspace, ok := certificate.Spec.SecretTemplate.Annotations[cluster.ANNOTATION_HCG_WORKSPACE]
+	if !ok {
+		return nil, errors.New("secret template is missing " + cluster.ANNOTATION_HCG_WORKSPACE + " annotation")
+	}
+
+	ingressNamespace, ok := certificate.Spec.SecretTemplate.Annotations[cluster.ANNOTATION_HCG_NAMESPACE]
+	if !ok {
+		return nil, errors.New("secret template is missing " + cluster.ANNOTATION_HCG_NAMESPACE + " annotation")
+	}
+	ingressName, ok := certificate.Spec.SecretTemplate.Labels[cluster.LABEL_OWNED_BY]
+	if !ok {
+		return nil, errors.New("secret template is missing " + cluster.LABEL_OWNED_BY + " label")
+	}
+
+	return &metadata.WorkspaceNamespaceName{
+		NamespacedName: types.NamespacedName{
+			Namespace: ingressNamespace,
+			Name:      ingressName,
+		},
+		Workspace: logicalcluster.New(ingressWorkspace),
+	}, nil
 }

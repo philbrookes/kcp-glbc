@@ -2,6 +2,9 @@ package ingress
 
 import (
 	"context"
+	v1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
+	v12 "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/certmanager/v1"
+	"github.com/jetstack/cert-manager/pkg/client/informers/externalversions"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -46,8 +49,10 @@ func NewController(config *ControllerConfig) *Controller {
 	c := &Controller{
 		Controller:            reconciler.NewController(controllerName, queue),
 		kubeClient:            config.KubeClient,
+		certClient:            config.CertClient,
 		certProvider:          config.CertProvider,
 		sharedInformerFactory: config.SharedInformerFactory,
+		certInformer:          config.CertInformer,
 		dnsRecordClient:       config.DnsRecordClient,
 		domain:                config.Domain,
 		tracker:               &tracker,
@@ -75,6 +80,18 @@ func NewController(config *ControllerConfig) *Controller {
 		DeleteFunc: func(obj interface{}) { c.ingressesFromService(obj) },
 	})
 
+	c.certInformer.Certmanager().V1().Certificates().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			c.ingressFromCertificate(obj)
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			c.ingressFromCertificate(newObj)
+		},
+		DeleteFunc: func(obj interface{}) {
+			c.ingressFromCertificate(obj)
+		},
+	})
+
 	c.indexer = c.sharedInformerFactory.Networking().V1().Ingresses().Informer().GetIndexer()
 	c.lister = c.sharedInformerFactory.Networking().V1().Ingresses().Lister()
 
@@ -83,8 +100,10 @@ func NewController(config *ControllerConfig) *Controller {
 
 type ControllerConfig struct {
 	KubeClient            kubernetes.ClusterInterface
+	CertClient            *v12.CertmanagerV1Client
 	DnsRecordClient       kuadrantv1.ClusterInterface
 	SharedInformerFactory informers.SharedInformerFactory
+	CertInformer          externalversions.SharedInformerFactory
 	Domain                *string
 	CertProvider          tls.Provider
 	HostResolver          net.HostResolver
@@ -94,7 +113,9 @@ type ControllerConfig struct {
 type Controller struct {
 	*reconciler.Controller
 	kubeClient            kubernetes.ClusterInterface
+	certClient            *v12.CertmanagerV1Client
 	sharedInformerFactory informers.SharedInformerFactory
+	certInformer          externalversions.SharedInformerFactory
 	dnsRecordClient       kuadrantv1.ClusterInterface
 	indexer               cache.Indexer
 	lister                networkingv1lister.IngressLister
@@ -155,6 +176,24 @@ func (c *Controller) ingressesFromService(obj interface{}) {
 		klog.Infof("tracked service %q triggered Ingress %q reconciliation", service.Name, ingress)
 		c.Queue.Add(ingress)
 	}
+}
+
+// ingressesFromService enqueues all the related ingresses for a given service when the service is changed.
+func (c *Controller) ingressFromCertificate(obj interface{}) {
+	certificate := obj.(*v1.Certificate)
+	selector, err := selectorFromCertificate(certificate)
+	if err != nil {
+		runtime.HandleError(err)
+		return
+	}
+	ingress, err := c.kubeClient.Cluster(selector.Workspace).NetworkingV1().Ingresses(selector.Namespace).Get(context.TODO(), selector.Name, metav1.GetOptions{})
+	ingressKey, err := cache.MetaNamespaceKeyFunc(ingress)
+	if err != nil {
+		runtime.HandleError(err)
+		return
+	}
+	klog.Infof("certificate event for %v triggered reconcile for ingress: %v", certificate.Name, ingress.Name)
+	c.Queue.Add(ingressKey)
 }
 
 // synchronisedEnqueue returns a function to be passed to the host watcher that
