@@ -1,0 +1,6 @@
+apiVersion: kuadrant.dev/v1
+kind: DomainVerification
+metadata:
+  name: hcpapps
+spec:
+  domain: hcpapps.net

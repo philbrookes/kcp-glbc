@@ -138,6 +138,7 @@ createGLBCCluster() {
 }
 
 createKCPWorkspace() {
+  sleep 5 
   echo "Creating HCG Workspace"
   KUBECONFIG=.kcp/admin.kubeconfig ${KUBECTL_KCP_BIN} workspace create kcp-glbc --enter
   echo "Waiting 15 seconds..."

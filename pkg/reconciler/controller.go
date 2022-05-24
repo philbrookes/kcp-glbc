@@ -54,6 +54,15 @@ func (c *Controller) Enqueue(obj interface{}) {
 	c.Queue.Add(key)
 }
 
+func (c *Controller) EnqueueAfter(obj interface{}, dur time.Duration) {
+	key, err := cache.MetaNamespaceKeyFunc(obj)
+	if err != nil {
+		runtime.HandleError(err)
+		return
+	}
+	c.Queue.AddAfter(key, dur)
+}
+
 func (c *Controller) Start(ctx context.Context, numThreads int) {
 	defer runtime.HandleCrash()
 	defer c.Queue.ShutDown()

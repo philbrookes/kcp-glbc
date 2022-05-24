@@ -23,15 +23,18 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
-	"github.com/kcp-dev/apimachinery/pkg/logicalcluster"
+	gonet "net"
 
+	"github.com/kcp-dev/apimachinery/pkg/logicalcluster"
 	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
 	"github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/informers/externalversions"
+	"github.com/kuadrant/kcp-glbc/pkg/dns"
 	"github.com/kuadrant/kcp-glbc/pkg/log"
 	"github.com/kuadrant/kcp-glbc/pkg/metrics"
 	"github.com/kuadrant/kcp-glbc/pkg/net"
 	"github.com/kuadrant/kcp-glbc/pkg/reconciler/deployment"
-	"github.com/kuadrant/kcp-glbc/pkg/reconciler/dns"
+	dnsreconciler "github.com/kuadrant/kcp-glbc/pkg/reconciler/dns"
+	"github.com/kuadrant/kcp-glbc/pkg/reconciler/domainverification"
 	"github.com/kuadrant/kcp-glbc/pkg/reconciler/ingress"
 	"github.com/kuadrant/kcp-glbc/pkg/reconciler/service"
 	tlsreconciler "github.com/kuadrant/kcp-glbc/pkg/reconciler/tls"
@@ -205,7 +208,7 @@ func main() {
 		CustomHostsEnabled: options.EnableCustomHosts,
 	})
 
-	dnsRecordController, err := dns.NewController(&dns.ControllerConfig{
+	dnsRecordController, err := dnsreconciler.NewController(&dnsreconciler.ControllerConfig{
 		DnsRecordClient:       kcpKuadrantClient,
 		SharedInformerFactory: kcpKuadrantInformerFactory,
 		DNSProvider:           options.DNSProvider,
@@ -223,6 +226,13 @@ func main() {
 		SharedInformerFactory: kcpKubeInformerFactory,
 	})
 	exitOnError(err, "Failed to create Deployment controller")
+
+	domainVerificationController, err := domainverification.NewController(&domainverification.ControllerConfig{
+		DomainVerificationClient: kcpKuadrantClient,
+		SharedInformerFactory:    kcpKuadrantInformerFactory,
+		DNSVerifier:              dns.NewVerifier(gonet.DefaultResolver),
+	})
+	exitOnError(err, "Failed to create DomainVerification controller")
 
 	kcpKubeInformerFactory.Start(ctx.Done())
 	kcpKubeInformerFactory.WaitForCacheSync(ctx.Done())
@@ -251,6 +261,7 @@ func main() {
 	}
 	start(gCtx, serviceController)
 	start(gCtx, deploymentController)
+	start(gCtx, domainVerificationController)
 
 	g.Go(func() error {
 		// wait until the controllers have return before stopping serving metrics

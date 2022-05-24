@@ -8,6 +8,7 @@ require (
 	github.com/go-logr/zapr v1.2.0
 	github.com/google/go-cmp v0.5.6
 	github.com/google/uuid v1.3.0
+	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/jetstack/cert-manager v1.7.1
 	github.com/kcp-dev/apimachinery v0.0.0-20220401165523-9ea2c4e584ad
 	github.com/kcp-dev/kcp v0.4.0-alpha.0
