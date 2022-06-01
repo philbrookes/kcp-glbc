@@ -3,6 +3,7 @@ package ingress
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,7 +12,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
@@ -27,9 +28,15 @@ import (
 )
 
 const (
-	manager                 = "kcp-ingress"
-	cascadeCleanupFinalizer = "kcp.dev/cascade-cleanup"
+	manager                      = "kcp-ingress"
+	cascadeCleanupFinalizer      = "kcp.dev/cascade-cleanup"
+	PendingCustomHostsAnnotation = "pendingCustomHosts"
+	PendingCustomHostsSeparator  = ";"
 )
+
+type Pending struct {
+	Rules []networkingv1.IngressRule `json:"rules"`
+}
 
 func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingress) error {
 	if ingress.DeletionTimestamp != nil && !ingress.DeletionTimestamp.IsZero() {
@@ -70,6 +77,11 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 		if err != nil {
 			return err
 		}
+	} else {
+		err := c.processCustomHostValidation(ctx, ingress)
+		if err != nil {
+			return err
+		}
 	}
 
 	if err := c.ensurePlacement(ctx, ingress); err != nil {
@@ -107,7 +119,7 @@ func (c *Controller) ensureCertificate(ctx context.Context, ingress *networkingv
 		return nil
 	}
 	err = c.certProvider.Create(ctx, controlClusterContext)
-	if err != nil && !errors.IsAlreadyExists(err) {
+	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
 	}
 
@@ -124,8 +136,8 @@ func (c *Controller) ensureCertificate(ctx context.Context, ingress *networkingv
 func (c *Controller) ensureDNS(ctx context.Context, ingress *networkingv1.Ingress) error {
 	if ingress.DeletionTimestamp != nil && !ingress.DeletionTimestamp.IsZero() {
 		// delete DNSRecord
-		err := c.dnsRecordClient.Cluster(logicalcluster.From(ingress)).KuadrantV1().DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
-		if err != nil && !errors.IsNotFound(err) {
+		err := c.kuadrantClient.Cluster(logicalcluster.From(ingress)).KuadrantV1().DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 		return nil
@@ -150,16 +162,16 @@ func (c *Controller) ensureDNS(ctx context.Context, ingress *networkingv1.Ingres
 		}
 
 		// Attempt to retrieve the existing DNSRecord for this Ingress
-		existing, err := c.dnsRecordClient.Cluster(logicalcluster.From(ingress)).KuadrantV1().DNSRecords(ingress.Namespace).Get(ctx, ingress.Name, metav1.GetOptions{})
+		existing, err := c.kuadrantClient.Cluster(logicalcluster.From(ingress)).KuadrantV1().DNSRecords(ingress.Namespace).Get(ctx, ingress.Name, metav1.GetOptions{})
 		// If it doesn't exist, create it
-		if err != nil && errors.IsNotFound(err) {
+		if err != nil && apierrors.IsNotFound(err) {
 			// Create the DNSRecord object
 			record := &v1.DNSRecord{}
 			if err := c.setDnsRecordFromIngress(ctx, ingress, record); err != nil {
 				return err
 			}
 			// Create the resource in the cluster
-			_, err = c.dnsRecordClient.Cluster(logicalcluster.From(record)).KuadrantV1().DNSRecords(record.Namespace).Create(ctx, record, metav1.CreateOptions{})
+			_, err = c.kuadrantClient.Cluster(logicalcluster.From(record)).KuadrantV1().DNSRecords(record.Namespace).Create(ctx, record, metav1.CreateOptions{})
 			if err != nil {
 				return err
 			}
@@ -173,7 +185,7 @@ func (c *Controller) ensureDNS(ctx context.Context, ingress *networkingv1.Ingres
 			if err != nil {
 				return err
 			}
-			_, err = c.dnsRecordClient.Cluster(logicalcluster.From(existing)).KuadrantV1().DNSRecords(existing.Namespace).Patch(ctx, existing.Name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: manager, Force: pointer.Bool(true)})
+			_, err = c.kuadrantClient.Cluster(logicalcluster.From(existing)).KuadrantV1().DNSRecords(existing.Namespace).Patch(ctx, existing.Name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: manager, Force: pointer.Bool(true)})
 			if err != nil {
 				return err
 			}
@@ -295,10 +307,10 @@ func (c *Controller) getServices(ctx context.Context, ingress *networkingv1.Ingr
 			if err == nil {
 				c.tracker.add(ingress, service)
 				services = append(services, service)
-			} else if !errors.IsNotFound(err) {
+			} else if !apierrors.IsNotFound(err) {
 				return nil, err
 			} else {
-				// ignore service not found errors
+				// ignore service not found apierrors
 				continue
 			}
 		}
@@ -332,6 +344,9 @@ func ingressKey(ingress *networkingv1.Ingress) interface{} {
 }
 
 func (c *Controller) replaceCustomHosts(ctx context.Context, ingress *networkingv1.Ingress) error {
+	if ingress.Annotations == nil {
+		ingress.Annotations = map[string]string{}
+	}
 	generatedHost := ingress.Annotations[cluster.ANNOTATION_HCG_HOST]
 	var hosts []string
 	for i, rule := range ingress.Spec.Rules {
@@ -353,6 +368,110 @@ func (c *Controller) replaceCustomHosts(ctx context.Context, ingress *networking
 	}
 
 	return nil
+}
+
+func (c *Controller) processCustomHostValidation(ctx context.Context, ingress *networkingv1.Ingress) error {
+	if ingress.Annotations == nil {
+		ingress.Annotations = map[string]string{}
+	}
+	generatedHost, ok := ingress.Annotations[cluster.ANNOTATION_HCG_HOST]
+	if !ok || generatedHost == "" {
+		return errors.New(fmt.Sprintf("generated host is empty for ingress: '%v/%v'", ingress.Namespace, ingress.Name))
+	}
+
+	dvs, err := c.kuadrantClient.Cluster(logicalcluster.From(ingress)).KuadrantV1().DomainVerifications().List(ctx, metav1.ListOptions{})
+
+	if err != nil {
+		return err
+	}
+	var unverifiedRules []networkingv1.IngressRule
+	var hosts []string
+
+	var preservedRules []networkingv1.IngressRule
+	//find any rules in the spec that are for hosts that are not verified
+	for _, rule := range ingress.Spec.Rules {
+		//ignore any rules for generated hosts (these are recalculated later)
+		if rule.Host == generatedHost {
+			continue
+		}
+
+		dv, err := findDomainVerification(ctx, ingress, rule.Host, dvs.Items)
+		if err != nil {
+			return err
+		}
+		//check against domainverification status
+		if dv != nil && dv.Status.Verified == true {
+			preservedRules = append(preservedRules, rule)
+		} else {
+			//remove rule from ingress and mark it as awaiting verification
+			unverifiedRules = append(unverifiedRules, rule)
+			hosts = append(hosts, rule.Host)
+		}
+
+		//recalculate the generatedhost rule in the spec
+		generatedHostRule := *rule.DeepCopy()
+		generatedHostRule.Host = generatedHost
+		preservedRules = append(preservedRules, generatedHostRule)
+	}
+	ingress.Spec.Rules = preservedRules
+
+	//test all the rules in the pending rules annotation to see if they are verified now
+	pendingRulesRaw := ingress.Annotations[PendingCustomHostsAnnotation]
+	pending := &Pending{}
+	json.Unmarshal([]byte(pendingRulesRaw), pending)
+	var preservedPendingRules []networkingv1.IngressRule
+	for _, pendingRule := range pending.Rules {
+		//recalculate the generatedhost rule in the spec
+		generatedHostRule := *pendingRule.DeepCopy()
+		generatedHostRule.Host = generatedHost
+		ingress.Spec.Rules = append(ingress.Spec.Rules, generatedHostRule)
+
+		c.Logger.Info("getting domain verification", "host", pendingRule.Host)
+		dv, err := findDomainVerification(ctx, ingress, pendingRule.Host, dvs.Items)
+		if err != nil {
+			return err
+		}
+
+		//check against domainverification status
+		if dv != nil && dv.Status.Verified == true {
+			//add the rule to the spec
+			ingress.Spec.Rules = append(ingress.Spec.Rules, pendingRule)
+		} else {
+			preservedPendingRules = append(preservedPendingRules, pendingRule)
+		}
+	}
+
+	// clean up replaced hosts from the tls list
+	removeHostsFromTLS(hosts, ingress)
+
+	//put the new unverified rules in the list of pending rules and update the annotation
+	pending.Rules = append(preservedPendingRules, unverifiedRules...)
+	newAnnotation, err := json.Marshal(pending)
+	if err != nil {
+		return err
+	}
+	ingress.Annotations[PendingCustomHostsAnnotation] = string(newAnnotation)
+
+	return nil
+}
+
+func findDomainVerification(ctx context.Context, ingress *networkingv1.Ingress, host string, dvs []v1.DomainVerification) (*v1.DomainVerification, error) {
+	parentHostParts := strings.SplitN(host, ".", 2)
+	//we've run out of sub-domains
+	if len(parentHostParts) < 2 {
+		return nil, nil
+	}
+
+	parentHost := parentHostParts[1]
+
+	for _, dv := range dvs {
+		if dv.Spec.Domain == parentHost {
+			return &dv, nil
+		}
+	}
+
+	//recurse up the subdomains
+	return findDomainVerification(ctx, ingress, parentHost, dvs)
 }
 
 func removeHostsFromTLS(hostsToRemove []string, ingress *networkingv1.Ingress) {

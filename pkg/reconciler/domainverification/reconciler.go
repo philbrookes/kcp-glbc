@@ -2,6 +2,9 @@ package domainverification
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/go-multierror"
@@ -20,6 +23,7 @@ const (
 
 type reconciler interface {
 	reconcile(ctx context.Context, dv *v1.DomainVerification) (reconcileStatus, error)
+	Name() string
 }
 
 type dnsVerifier interface {
@@ -30,6 +34,11 @@ type domainVerificationStatus struct {
 	updateStatus func(ctx context.Context, dv *v1.DomainVerification) error
 	dnsVerifier  dnsVerifier
 	requeAfter   func(item interface{}, duration time.Duration)
+	name         string
+}
+
+func (dsr *domainVerificationStatus) Name() string {
+	return dsr.name
 }
 
 // reconcile ensures the status is as expected
@@ -37,13 +46,17 @@ func (dsr *domainVerificationStatus) reconcile(ctx context.Context, dv *v1.Domai
 	var status = reconcileStatusContinue
 	var errs error
 	verified, ensureErr := dsr.ensureDomainVerificationStatus(ctx, dv)
-	if ensureErr != nil {
-		errs = multierror.Append(errs, ensureErr)
+	if ensureErr != nil && !strings.Contains(ensureErr.Error(), "no such host") {
+		errs = multierror.Append(errs, errors.New(fmt.Sprintf("error ensuring domain verification: %v", ensureErr)))
+		status = reconcileStatusStop
+	} else if ensureErr != nil && strings.Contains(ensureErr.Error(), "no such host") {
+		//don't return error if host does not exist, returning errors here causes an immediate requeue of the resource
 		status = reconcileStatusStop
 	}
+
 	updateErr := dsr.updateStatus(ctx, dv)
 	if updateErr != nil {
-		errs = multierror.Append(errs, updateErr)
+		errs = multierror.Append(errs, errors.New(fmt.Sprintf("error from provided updateStatus: %v", updateErr)))
 		status = reconcileStatusStop
 	}
 	if !verified {
@@ -69,15 +82,18 @@ func (dsr *domainVerificationStatus) ensureDomainVerificationStatus(ctx context.
 	domainVerification.Status.LastChecked = metav1.Now()
 	// check DNS to see can we validate
 	exists, err := dsr.dnsVerifier.TxtRecordExists(ctx, domainVerification.Spec.Domain, domainVerification.Status.Token)
-	if err != nil || !exists {
-		domainVerification.Status.Message = "domain verification was not successful"
+	if err != nil {
+		domainVerification.Status.Message = fmt.Sprintf("domain verification was not successful: %v", err)
 		domainVerification.Status.NextCheck = metav1.NewTime(time.Now().Add(recheckDefault))
-		return false, err
+		return false, errors.New(fmt.Sprintf("error checking for text record: %v", err))
+	} else if !exists {
+		domainVerification.Status.Message = fmt.Sprintf("domain verification was not successful: TXT record does not exist")
+		domainVerification.Status.NextCheck = metav1.NewTime(time.Now().Add(recheckDefault))
+		return false, nil
 	}
-	if exists {
-		domainVerification.Status.Message = "domain verification was successful"
-		domainVerification.Status.Verified = true
-	}
+	domainVerification.Status.Message = "domain verification was successful"
+	domainVerification.Status.Verified = true
+
 	return exists, nil
 }
 
@@ -87,6 +103,7 @@ func (c *Controller) reconcile(ctx context.Context, domainVerfication *v1.Domain
 			updateStatus: c.updateStatus,
 			dnsVerifier:  c.dnsVerifier,
 			requeAfter:   c.EnqueueAfter,
+			name:         "domainVerificationStatus",
 		},
 	}
 
@@ -95,7 +112,7 @@ func (c *Controller) reconcile(ctx context.Context, domainVerfication *v1.Domain
 	for _, r := range reconcilers {
 		status, err := r.reconcile(ctx, domainVerfication)
 		if err != nil {
-			errs = append(errs, err)
+			errs = append(errs, errors.New(fmt.Sprintf("error from reconciler '%v': %v", r.Name(), err)))
 		}
 		if status == reconcileStatusStop {
 			break
@@ -107,7 +124,7 @@ func (c *Controller) reconcile(ctx context.Context, domainVerfication *v1.Domain
 func (c *Controller) updateStatus(ctx context.Context, dv *v1.DomainVerification) error {
 	_, err := c.domainVerificationClient.Cluster(logicalcluster.From(dv)).KuadrantV1().DomainVerifications().UpdateStatus(ctx, dv, metav1.UpdateOptions{})
 	if err != nil {
-		return err
+		return errors.New(fmt.Sprintf("error updating domain verification status: %v", err))
 	}
 	return nil
 }

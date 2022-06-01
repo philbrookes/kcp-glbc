@@ -2,6 +2,7 @@ package dns
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -23,15 +24,12 @@ type verifier struct {
 func (v *verifier) TxtRecordExists(ctx context.Context, domain, value string) (bool, error) {
 	values, err := v.resolver.LookupTXT(ctx, domain)
 	if err != nil {
-		return false, err
+		return false, errors.New(fmt.Sprintf("error looking for TXT record on '%v': %v", domain, err))
 	}
 
 	for _, txtValue := range values {
-		fmt.Printf("value to check %s dns value %s", value, txtValue)
 		if strings.TrimSpace(txtValue) == strings.TrimSpace(value) {
-			fmt.Println("value found returning true ")
 			return true, nil
-
 		}
 	}
 	return false, nil

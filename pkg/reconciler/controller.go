@@ -117,7 +117,6 @@ func (c *Controller) processNextWorkItem(ctx context.Context) bool {
 	// Re-enqueue up to 5 times
 	n := c.Queue.NumRequeues(key)
 	if n < 5 {
-		c.Logger.Error(err, "Re-queuing after reconciliation error", "key", key, "retries", n)
 		c.Queue.AddRateLimited(key)
 		return true
 	}
