@@ -162,7 +162,7 @@ jobs:
           KUBECONFIG=.kcp/admin.kubeconfig kubectl wait --timeout=300s --for=condition=Ready=true synctargets "glbc"
 
           echo "Deploy GLBC components (cert-manager)"
-          KUBECONFIG=.kcp/admin.kubeconfig ./bin/kubectl-kcp workspace use "root:users:ev:vo:system-apiserver:kcp-glbc"
+          KUBECONFIG=.kcp/admin.kubeconfig ./bin/kubectl-kcp workspace use "root:default:kcp-glbc"
           KUBECONFIG=.kcp/admin.kubeconfig GLBC_USER_WORKLOAD_CLUSTER_NAME=kcp-cluster-1 ./utils/deploy.sh -c "cert-manager"
           KUBECONFIG=.kcp/admin.kubeconfig  kubectl -n cert-manager wait --timeout=300s --for=condition=Available deployments --all
 
