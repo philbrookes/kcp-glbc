@@ -138,6 +138,7 @@ createUserSyncTarget() {
   # Enable advanced scheduling
   echo "Enabling advanced scheduling"
   KUBECONFIG=${KUBECONFIG_GLBC} kubectl annotate --overwrite synctarget ${clusterName} featuregates.experimental.workload.kcp.dev/advancedscheduling='true'
+  KUBECONFIG=${KUBECONFIG_GLBC} kubectl label --overwrite synctarget ${clusterName} kuadrant.dev/synctarget=${clusterName}
   KUBECONFIG=${KUBECONFIG_GLBC} kubectl get synctargets ${clusterName} -o json | jq .metadata.annotations
 
   kubectl apply -f ${TEMP_DIR}/${clusterName}-syncer.yaml

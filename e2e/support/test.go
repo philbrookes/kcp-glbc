@@ -103,6 +103,7 @@ func (t *T) NewTestWorkspace() *v1beta1.Workspace {
 	t.T().Cleanup(func() {
 		deleteTestWorkspace(t, workspace)
 	})
+	t.T().Logf("Creating workspace %v", workspace.Name)
 	t.Eventually(Workspace(t, workspace.Name)).Should(gomega.WithTransform(
 		ConditionStatus(tenancyv1alpha1.WorkspaceScheduled),
 		gomega.Equal(corev1.ConditionTrue),

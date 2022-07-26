@@ -57,7 +57,7 @@ func (r *dnsReconciler) reconcile(ctx context.Context, ingress *networkingv1.Ing
 			return reconcileStatusStop, errors.New("invalid workloadStatus annotation format")
 		}
 		//only add IP record if cluster is  targeted
-		if !metadata.HasLabel(ingress, workloadMigration.WorkloadTargetLabel+"/"+annotationParts[1]) {
+		if !metadata.HasLabel(ingress, workloadMigration.WorkloadTargetLabel+annotationParts[1]) {
 			continue
 		}
 		err := json.Unmarshal([]byte(v), ingressStatus)
@@ -224,7 +224,7 @@ func (r *dnsReconciler) targetsFromIngress(ctx context.Context, ingress *network
 			return targets, fmt.Errorf("invalid workloadStatus annotation format")
 		}
 
-		if !metadata.HasLabel(ingress, workloadMigration.WorkloadTargetLabel+"/"+annotationParts[1]) {
+		if !metadata.HasLabel(ingress, workloadMigration.WorkloadTargetLabel+annotationParts[1]) {
 			continue
 		}
 		err := json.Unmarshal([]byte(v), ingressStatus)

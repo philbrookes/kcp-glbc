@@ -1,0 +1,30 @@
+---
+apiVersion: scheduling.kcp.dev/v1alpha1
+kind: Location
+metadata:
+  name: kcp-location-1
+  labels:
+    kuadrant.dev/location: kcp-location-1
+spec:
+  instanceSelector:
+    matchLabels:
+      kuadrant.dev/synctarget: kcp-cluster-1
+  resource:
+    group: workload.kcp.dev
+    resource: synctargets
+    version: v1alpha1
+---
+apiVersion: scheduling.kcp.dev/v1alpha1
+kind: Location
+metadata:
+  name: kcp-location-2
+  labels:
+    kuadrant.dev/location: kcp-location-2
+spec:
+  instanceSelector:
+    matchLabels:
+      kuadrant.dev/synctarget: kcp-cluster-2
+  resource:
+    group: workload.kcp.dev
+    resource: synctargets
+    version: v1alpha1

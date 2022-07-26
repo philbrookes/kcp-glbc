@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	WorkloadTargetLabel      = "state.internal.workload.kcp.dev"
+	WorkloadTargetLabel      = "state.workload.kcp.dev/"
 	SyncerFinalizer          = "workload.kcp.dev/syncer-"
 	WorkloadClusterFinalizer = "finalizers.workload.kcp.dev"
 	WorkloadStatusAnnotation = "experimental.status.workload.kcp.dev/"
@@ -57,7 +57,7 @@ func gracefulRemoveSoftFinalizers(obj metav1.Object, queue workqueue.RateLimitin
 				return
 			}
 			//no label for this finalizer, set up graceful delete
-			if _, ok := obj.GetLabels()[WorkloadTargetLabel+"/"+finalizerParts[1]]; !ok {
+			if _, ok := obj.GetLabels()[WorkloadTargetLabel+finalizerParts[1]]; !ok {
 				clusterDeleteAtAnnotation := DeleteAtAnnotation + "-" + finalizerParts[1]
 				//delete delay annotation not yet set, set it
 				if v, ok := obj.GetAnnotations()[clusterDeleteAtAnnotation]; !ok {

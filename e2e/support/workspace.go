@@ -18,7 +18,7 @@ package support
 
 import (
 	"fmt"
-	"github.com/google/uuid"
+	"github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
 	tenancyv1beta1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1beta1"
 	"github.com/onsi/gomega"
 
@@ -99,7 +99,7 @@ func Workspace(t Test, name string) func() *tenancyv1beta1.Workspace {
 }
 
 func createTestWorkspace(t Test) *tenancyv1beta1.Workspace {
-	name := "test-" + uuid.New().String()
+	name := "test-pbrookes" // + uuid.New().String()
 
 	workspace := &tenancyv1beta1.Workspace{
 		TypeMeta: metav1.TypeMeta{
@@ -109,10 +109,15 @@ func createTestWorkspace(t Test) *tenancyv1beta1.Workspace {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 		},
-		Spec: tenancyv1beta1.WorkspaceSpec{},
+		Spec: tenancyv1beta1.WorkspaceSpec{
+			Type: v1alpha1.ClusterWorkspaceTypeReference{
+				Name: v1alpha1.ClusterWorkspaceTypeName(name),
+				Path: "root:default",
+			},
+		},
 	}
-
-	workspace, err := t.Client().Kcp().Cluster(TestOrganization).TenancyV1beta1().Workspaces().Create(t.Ctx(), workspace, metav1.CreateOptions{})
+	t.T().Logf("creating workspace: %+v", workspace)
+	workspace, err := t.Client().Kcp().Cluster(logicalcluster.New("root:default")).TenancyV1beta1().Workspaces().Create(t.Ctx(), workspace, metav1.CreateOptions{})
 	if err != nil {
 		t.Expect(err).NotTo(gomega.HaveOccurred())
 	}
