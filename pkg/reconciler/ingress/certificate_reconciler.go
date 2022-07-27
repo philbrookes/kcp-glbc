@@ -161,11 +161,13 @@ func (r *certificateReconciler) reconcile(ctx context.Context, ingress *networki
 	certReq.Labels[LABEL_HCG_MANAGED] = "true"
 
 	if ingress.DeletionTimestamp != nil && !ingress.DeletionTimestamp.IsZero() {
-		if err := r.deleteCertificate(ctx, certReq); err != nil {
+		if err := r.deleteCertificate(ctx, certReq); err != nil && !strings.Contains(err.Error(), "not found") {
+			r.log.Info("error deleting certificate")
 			return reconcileStatusStop, err
 		}
 		//TODO remove once owner refs work in kcp
-		if err := r.deleteSecret(ctx, logicalcluster.From(ingress), ingress.Namespace, tlsSecretName); err != nil {
+		if err := r.deleteSecret(ctx, logicalcluster.From(ingress), ingress.Namespace, tlsSecretName); err != nil && !strings.Contains(err.Error(), "not found") {
+			r.log.Info("error deleting certificate secret")
 			return reconcileStatusStop, err
 		}
 		return reconcileStatusContinue, nil

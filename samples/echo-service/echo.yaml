@@ -27,7 +27,7 @@ spec:
     spec:
       containers:
         - name: echo-server
-          image: jmalloc/echo-server
+          image: docker.io/jmalloc/echo-server
           ports:
             - name: http-port
               containerPort: 8080

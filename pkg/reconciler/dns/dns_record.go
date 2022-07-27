@@ -3,7 +3,9 @@ package dns
 import (
 	"context"
 	"fmt"
+	"github.com/kuadrant/kcp-glbc/pkg/util/metadata"
 	"reflect"
+	"strings"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -38,10 +40,12 @@ func (c *Controller) reconcile(ctx context.Context, dnsRecord *v1.DNSRecord) err
 		}
 
 		c.Logger.Info("Deleting DNSRecord", "dnsRecord", dnsRecord)
-		if err := c.deleteRecord(dnsRecord); err != nil {
+		if err := c.deleteRecord(dnsRecord); err != nil && !strings.Contains(err.Error(), "was not found") {
 			c.Logger.Error(err, "Failed to delete DNSRecord", "record", dnsRecord)
 			return err
 		}
+
+		metadata.RemoveFinalizer(dnsRecord, DNSRecordFinalizer)
 
 		return nil
 	}
