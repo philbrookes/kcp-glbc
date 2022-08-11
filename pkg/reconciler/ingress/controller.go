@@ -2,6 +2,9 @@ package ingress
 
 import (
 	"context"
+	"encoding/json"
+	"k8s.io/apimachinery/pkg/labels"
+	"strings"
 
 	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -57,7 +60,7 @@ func NewController(config *ControllerConfig) *Controller {
 		certProvider:             config.CertProvider,
 		sharedInformerFactory:    config.KCPSharedInformerFactory,
 		glbcInformerFactory:      config.GlbcInformerFactory,
-		dnsRecordClient:          config.DnsRecordClient,
+		kuadrantClient:           config.DnsRecordClient,
 		domain:                   config.Domain,
 		hostResolver:             hostResolver,
 		hostsWatcher:             net.NewHostsWatcher(&base.Logger, hostResolver, net.DefaultInterval),
@@ -92,6 +95,12 @@ func NewController(config *ControllerConfig) *Controller {
 			ingressObjectTotal.Dec()
 			c.Enqueue(obj)
 		},
+	})
+
+	c.dnsRecordInformerFactory.Kuadrant().V1().DomainVerifications().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    c.enqueueIngresses(c.ingressesFromDomainVerification),
+		UpdateFunc: c.enqueueIngressesFromUpdate(c.ingressesFromDomainVerification),
+		DeleteFunc: c.enqueueIngresses(c.ingressesFromDomainVerification),
 	})
 
 	// watch for certificates being addded and updated
@@ -226,7 +235,7 @@ type Controller struct {
 	*basereconciler.Controller
 	kubeClient               kubernetes.ClusterInterface
 	sharedInformerFactory    informers.SharedInformerFactory
-	dnsRecordClient          kuadrantclientv1.ClusterInterface
+	kuadrantClient           kuadrantclientv1.ClusterInterface
 	indexer                  cache.Indexer
 	ingressLister            networkingv1lister.IngressLister
 	certificateLister        certmanlister.CertificateLister
@@ -291,4 +300,60 @@ func (c *Controller) getIngressByKey(key string) (*networkingv1.Ingress, error) 
 		return nil, errors.NewNotFound(networkingv1.Resource("ingress"), key)
 	}
 	return i.(*networkingv1.Ingress), nil
+}
+
+func (c *Controller) ingressesFromDomainVerification(obj interface{}) ([]*networkingv1.Ingress, error) {
+	dv := obj.(*kuadrantv1.DomainVerification)
+	domain := strings.ToLower(strings.TrimSpace(dv.Spec.Domain))
+	c.Logger.V(4).Info("finding ingresses based on dv", "domain", domain)
+
+	// no actions to take on ingresses if domains is still not verified yet
+	if !dv.Status.Verified {
+		c.Logger.V(4).Info("dv not verified, exiting", "verified", dv.Status.Verified)
+		return nil, nil
+	}
+
+	// find all ingresses with pending hosts that contain this domains
+	ingressList, err := c.ingressLister.Ingresses("").List(labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+
+	ingressesToEnqueue := []*networkingv1.Ingress{}
+
+	for _, ingress := range ingressList {
+		ingressNamespaceName := ingress.Namespace + "/" + ingress.Name
+		c.Logger.V(4).Info("checking for pending  host", "ingress", ingressNamespaceName)
+
+		generatedRulesAnnotation, ok := ingress.Annotations[GeneratedRulesAnnotation]
+		if !ok {
+			continue
+		}
+
+		var generatedRules map[string]int
+		if err := json.Unmarshal([]byte(generatedRulesAnnotation), &generatedRules); err != nil {
+			return nil, err
+		}
+
+	PotentialPendingHost:
+		for potentialPending := range generatedRules {
+			if !hostMatches(potentialPending, domain) {
+				continue
+			}
+
+			// If the ingress already has a rule with this domain,
+			// it means it has been already verified. Do not
+			// enqueue
+			for _, rule := range ingress.Spec.Rules {
+				if rule.Host == potentialPending {
+					continue PotentialPendingHost
+				}
+			}
+
+			c.Logger.Info("Enqueuing Ingress reconciliation via domains verification", "ingress", ingressNamespaceName, "domain", domain)
+			ingressesToEnqueue = append(ingressesToEnqueue, ingress)
+		}
+	}
+
+	return ingressesToEnqueue, nil
 }

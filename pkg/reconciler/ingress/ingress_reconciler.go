@@ -2,6 +2,7 @@ package ingress
 
 import (
 	"context"
+	"k8s.io/apimachinery/pkg/util/runtime"
 	"strings"
 
 	networkingv1 "k8s.io/api/networking/v1"
@@ -17,7 +18,8 @@ type reconcileStatus int
 const (
 	reconcileStatusStop reconcileStatus = iota
 	reconcileStatusContinue
-	cascadeCleanupFinalizer = "kcp.dev/cascade-cleanup"
+	cascadeCleanupFinalizer  = "kcp.dev/cascade-cleanup"
+	GeneratedRulesAnnotation = "kuadrant.dev/custom-hosts.generated"
 )
 
 type reconciler interface {
@@ -35,8 +37,10 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 	reconcilers := []reconciler{
 		//hostReconciler is first as the others depends on it for the host to be set on the ingress
 		&hostReconciler{
-			managedDomain: c.domain,
-			log:           c.Logger,
+			managedDomain:      c.domain,
+			log:                c.Logger,
+			customHostsEnabled: c.customHostsEnabled,
+			kuadrantClient:     c.kuadrantClient,
 		},
 		&certificateReconciler{
 			createCertificate:    c.certProvider.Create,
@@ -91,4 +95,36 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 func ingressKey(ingress *networkingv1.Ingress) interface{} {
 	key, _ := cache.MetaNamespaceKeyFunc(ingress)
 	return cache.ExplicitKey(key)
+}
+
+// enqueueIngresses creates an event handler function given a function that
+// returns a list of ingresses to enqueue, or an error. If an error is returned,
+// no ingresses are enqueued.
+//
+// This allows to easierly unit test the logic of the function that returns
+// the ingresses to enqueue
+func (c *Controller) enqueueIngresses(getIngresses func(obj interface{}) ([]*networkingv1.Ingress, error)) func(obj interface{}) {
+	return func(obj interface{}) {
+		ingresses, err := getIngresses(obj)
+		if err != nil {
+			runtime.HandleError(err)
+			return
+		}
+
+		for _, ingress := range ingresses {
+			ingressKey, err := cache.MetaNamespaceKeyFunc(ingress)
+			if err != nil {
+				runtime.HandleError(err)
+				continue
+			}
+
+			c.Queue.Add(ingressKey)
+		}
+	}
+}
+
+func (c *Controller) enqueueIngressesFromUpdate(getIngresses func(obj interface{}) ([]*networkingv1.Ingress, error)) func(oldObj, newObj interface{}) {
+	return func(oldObj, newObj interface{}) {
+		c.enqueueIngresses(getIngresses)(newObj)
+	}
 }

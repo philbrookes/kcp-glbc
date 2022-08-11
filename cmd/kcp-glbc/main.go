@@ -4,6 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	dnspkg "github.com/kuadrant/kcp-glbc/pkg/dns"
+	"github.com/kuadrant/kcp-glbc/pkg/reconciler/domainverification"
+	gonet "net"
 	"os"
 	"sync"
 	"time"
@@ -212,6 +215,14 @@ func main() {
 	})
 	exitOnError(err, "Failed to create DNSRecord controller")
 
+	domainVerificationController, err := domainverification.NewController(&domainverification.ControllerConfig{
+		DomainVerificationClient: kcpKuadrantClient,
+		SharedInformerFactory:    kcpKuadrantInformerFactory,
+		DNSVerifier:              dnspkg.NewVerifier(gonet.DefaultResolver),
+	})
+
+	exitOnError(err, "Failed to create DomainVerification controller")
+
 	serviceController, err := service.NewController(&service.ControllerConfig{
 		ServicesClient:        kcpKubeClient,
 		SharedInformerFactory: kcpKubeInformerFactory,
@@ -239,6 +250,7 @@ func main() {
 
 	start(gCtx, ingressController)
 	start(gCtx, dnsRecordController)
+	start(gCtx, domainVerificationController)
 
 	start(gCtx, serviceController)
 	start(gCtx, deploymentController)

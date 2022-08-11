@@ -71,6 +71,7 @@ metadata:
 spec:
   latestResourceSchemas:
     - latest.dnsrecords.kuadrant.dev
+    - latest.domainverifications.kuadrant.dev
   permissionClaims:
     - group: ""
       resource: "secrets"
