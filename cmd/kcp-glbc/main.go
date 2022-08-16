@@ -4,18 +4,20 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	dnspkg "github.com/kuadrant/kcp-glbc/pkg/dns"
-	"github.com/kuadrant/kcp-glbc/pkg/reconciler/domainverification"
 	gonet "net"
 	"os"
 	"sync"
 	"time"
+
+	dnspkg "github.com/kuadrant/kcp-glbc/pkg/dns"
+	"github.com/kuadrant/kcp-glbc/pkg/reconciler/domainverification"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
 
 	// Make sure our workqueue MetricsProvider is the first to register
+
 	_ "github.com/kuadrant/kcp-glbc/pkg/reconciler"
 
 	certmanclient "github.com/jetstack/cert-manager/pkg/client/clientset/versioned"
@@ -35,6 +37,7 @@ import (
 	kcp "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
 	"github.com/kcp-dev/logicalcluster/v2"
 
+	"github.com/kuadrant/kcp-glbc/pkg/admission"
 	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
 	"github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/informers/externalversions"
 	"github.com/kuadrant/kcp-glbc/pkg/log"
@@ -206,6 +209,7 @@ func main() {
 		// 	Namespace: "default",
 		// },
 		CustomHostsEnabled: options.EnableCustomHosts,
+		// TLSChannel:         tlsChn,
 	})
 
 	dnsRecordController, err := dns.NewController(&dns.ControllerConfig{
@@ -219,6 +223,12 @@ func main() {
 		DomainVerificationClient: kcpKuadrantClient,
 		SharedInformerFactory:    kcpKuadrantInformerFactory,
 		DNSVerifier:              dnspkg.NewVerifier(gonet.DefaultResolver),
+		// // For testing. TODO: Make configurable through flags/env variable
+		// DNSVerifier: &net.ConfigMapHostResolver{
+		// 	Name:      "hosts",
+		// 	Namespace: "default",
+		// 	Client:    kcpKubeClient.Cluster(logicalcluster.New(options.GLBCWorkspace)),
+		// },
 	})
 
 	exitOnError(err, "Failed to create DomainVerification controller")
@@ -254,6 +264,10 @@ func main() {
 
 	start(gCtx, serviceController)
 	start(gCtx, deploymentController)
+
+	g.Go(func() error {
+		return admission.StartServer(gCtx)
+	})
 
 	g.Go(func() error {
 		// wait until the controllers have return before stopping serving metrics

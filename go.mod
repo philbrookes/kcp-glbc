@@ -13,7 +13,6 @@ require (
 	github.com/jetstack/cert-manager v1.7.1
 	github.com/kcp-dev/kcp v0.7.1
 	github.com/kcp-dev/kcp/pkg/apis v0.7.1
-	github.com/kcp-dev/logicalcluster v1.1.1
 	github.com/kcp-dev/logicalcluster/v2 v2.0.0-alpha.1
 	github.com/miekg/dns v1.1.34
 	github.com/onsi/gomega v1.17.0
@@ -31,6 +30,7 @@ require (
 	k8s.io/code-generator v0.24.3
 	k8s.io/klog/v2 v2.60.1
 	k8s.io/utils v0.0.0-20220210201930-3a6ce19ff2f9
+	sigs.k8s.io/controller-runtime v0.11.0
 )
 
 require (
@@ -130,6 +130,7 @@ require (
 	golang.org/x/time v0.0.0-20220210224613-90d013bbcef8 // indirect
 	golang.org/x/tools v0.1.10-0.20220218145154-897bd77cd717 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
+	gomodules.xyz/jsonpatch/v2 v2.2.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/genproto v0.0.0-20220118154757-00ab72f36ad5 // indirect
 	google.golang.org/grpc v1.43.0 // indirect
