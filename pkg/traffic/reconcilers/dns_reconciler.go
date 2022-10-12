@@ -94,7 +94,7 @@ func (r *DnsReconciler) Reconcile(ctx context.Context, accessor traffic.Interfac
 			r.ForgetHost(key, watcher.Host)
 		}
 	}
-	// Attempt to retrieve the existing DNSRecord for this Ingress
+	// Attempt to retrieve the existing DNSRecord for this traffic object
 	existing, err := r.GetDNS(ctx, accessor)
 	// If it doesn't exist, create it
 	if err != nil {
@@ -121,6 +121,11 @@ func (r *DnsReconciler) Reconcile(ctx context.Context, accessor traffic.Interfac
 	// If it does exist, update it
 	copyDNS := existing.DeepCopy()
 	r.setEndpointFromTargets(managedHost, activeDNSTargetIPs, copyDNS)
+	objMeta, err := meta.Accessor(accessor)
+	if err != nil {
+		return traffic.ReconcileStatusContinue, err
+	}
+	copyHealthAnnotations(copyDNS, objMeta)
 	if !equality.Semantic.DeepEqual(copyDNS, existing) {
 		r.Log.V(3).Info("updating DNSRecord ", "record", copyDNS.Name, "endpoints for DNSRecord", "endpoints", copyDNS.Spec.Endpoints)
 		if _, err = r.UpdateDNS(ctx, copyDNS); err != nil {
@@ -168,11 +173,15 @@ func newDNSRecordForObject(obj runtime.Object) (*v1.DNSRecord, error) {
 		record.Annotations[traffic.ANNOTATION_TRAFFIC_KEY] = string(objectKey(obj))
 	}
 
-	metadata.CopyAnnotationsPredicate(objMeta, record, metadata.KeyPredicate(func(key string) bool {
-		return strings.HasPrefix(key, traffic.ANNOTATION_HEALTH_CHECK_PREFIX)
-	}))
+	copyHealthAnnotations(record, objMeta)
 	return record, nil
 
+}
+
+func copyHealthAnnotations(dnsRecord *v1.DNSRecord, objectMeta metav1.Object) {
+	metadata.CopyAnnotationsPredicate(objectMeta, dnsRecord, metadata.KeyPredicate(func(key string) bool {
+		return strings.HasPrefix(key, traffic.ANNOTATION_HEALTH_CHECK_PREFIX)
+	}))
 }
 
 func (r *DnsReconciler) setEndpointFromTargets(dnsName string, dnsTargets map[string][]string, dnsRecord *v1.DNSRecord) {
