@@ -22,6 +22,7 @@ const (
 	ReconcileStatusContinue
 
 	ANNOTATION_TRAFFIC_KEY              = "kuadrant.dev/traffic-key"
+	ANNOTATION_TRAFFIC_KIND             = "kuadrant.dev/traffic-kind"
 	ANNOTATION_CERTIFICATE_STATE        = "kuadrant.dev/certificate-status"
 	ANNOTATION_HCG_HOST                 = "kuadrant.dev/host.generated"
 	ANNOTATION_HEALTH_CHECK_PREFIX      = "kuadrant.experimental/health-"

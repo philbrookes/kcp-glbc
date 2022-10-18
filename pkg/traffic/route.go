@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	workload "github.com/kcp-dev/kcp/pkg/apis/workload/v1alpha1"
+
 	"github.com/kuadrant/kcp-glbc/pkg/_internal/metadata"
 	v1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
 	"github.com/kuadrant/kcp-glbc/pkg/dns"
@@ -106,6 +107,8 @@ func (a *Route) ProcessCustomHosts(ctx context.Context, dvs *v1.DomainVerificati
 
 	//don't process custom hosts for shadows
 	if metadata.HasAnnotation(a.Route, ANNOTATION_IS_GLBC_SHADOW) {
+		//reset the host to our generated host
+		a.Spec.Host = generatedHost
 		return nil
 	}
 

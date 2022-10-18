@@ -75,7 +75,7 @@ func NewController(config *ControllerConfig) *Controller {
 	c.Process = c.process
 	c.hostsWatcher.OnChange = c.Enqueue
 
-	go c.startWatches()
+	c.startWatches()
 
 	return c
 }
@@ -85,8 +85,10 @@ func (c *Controller) resourceExists() bool {
 	_, err := c.kcpKubeClient.Cluster(c.glbcWorkspace).Discovery().ServerResourcesForGroupVersion(routeResource.GroupVersion().String())
 	return err == nil
 }
+
 func (c *Controller) startWatches() {
 	if !c.resourceExists() {
+		c.Logger.Info("no routes resource detected; not starting route event handlers")
 		return
 	}
 	c.Logger.Info("starting route event handlers")
@@ -142,14 +144,19 @@ func (c *Controller) startWatches() {
 			if _, ok := certificate.Labels[basereconciler.LABEL_HCG_MANAGED]; !ok {
 				return false
 			}
-			if _, ok := certificate.Annotations[traffic.ANNOTATION_TRAFFIC_KEY]; ok {
-				return true
+			if _, ok := certificate.Annotations[traffic.ANNOTATION_TRAFFIC_KEY]; !ok {
+				return false
 			}
 			return true
 		},
 		Handler: cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				certificate := obj.(*certman.Certificate)
+				_, err := c.getRouteByKey(certificate.Annotations[traffic.ANNOTATION_TRAFFIC_KEY])
+				if k8serrors.IsNotFound(err) {
+					//not connected to a route, do not handle events
+					return
+				}
 				traffic.CertificateAddedHandler(certificate)
 			},
 			UpdateFunc: func(oldObj, newObj interface{}) {
@@ -158,23 +165,29 @@ func (c *Controller) startWatches() {
 				if oldCert.ResourceVersion == newCert.ResourceVersion {
 					return
 				}
-
+				route, err := c.getRouteByKey(newCert.Annotations[traffic.ANNOTATION_TRAFFIC_KEY])
+				if k8serrors.IsNotFound(err) {
+					//not connected to a route, do not handle events
+					return
+				}
 				enq := traffic.CertificateUpdatedHandler(oldCert, newCert)
 				if enq {
-
-					trafficKey := newCert.Annotations[traffic.ANNOTATION_TRAFFIC_KEY]
-					c.Logger.V(3).Info("reqeuing route certificate updated", "certificate", newCert.Name, "traffic key", trafficKey)
-					c.enqueueRouteByKey(trafficKey)
+					c.Enqueue(route)
 				}
 			},
 			DeleteFunc: func(obj interface{}) {
 				certificate := obj.(*certman.Certificate)
+				route, err := c.getRouteByKey(certificate.Annotations[traffic.ANNOTATION_TRAFFIC_KEY])
+				if k8serrors.IsNotFound(err) {
+					//not connected to a route, do not handle events
+					return
+				}
 				// handle metric requeue route if the cert is deleted and the route still exists
 				// covers a manual deletion of cert and will ensure a new cert is created
 				traffic.CertificateDeletedHandler(certificate)
 				trafficKey := certificate.Annotations[traffic.ANNOTATION_TRAFFIC_KEY]
-				c.Logger.V(3).Info("reqeuing route certificate deleted", "certificate", certificate.Name, "traffic key", trafficKey)
-				c.enqueueRouteByKey(trafficKey)
+				c.Logger.V(3).Info("requeueing route certificate deleted", "certificate", certificate.Name, "traffic key", trafficKey)
+				c.Enqueue(route)
 			},
 		},
 	})

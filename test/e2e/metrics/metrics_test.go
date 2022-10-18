@@ -26,6 +26,7 @@ import (
 	"time"
 
 	workload "github.com/kcp-dev/kcp/pkg/apis/workload/v1alpha1"
+
 	"github.com/kuadrant/kcp-glbc/pkg/traffic"
 
 	. "github.com/onsi/gomega"
@@ -95,12 +96,12 @@ func TestMetrics(t *testing.T) {
 
 	// Create the test workspace
 	workspace := test.NewTestWorkspace()
-
 	// Create GLBC APIBinding in workspace
 	test.CreateGLBCAPIBindings(workspace, GLBCWorkspace, GLBCExportName)
+	test.CreatePlacements(workspace)
 
 	// Create a namespace
-	namespace := test.NewTestNamespace(InWorkspace(workspace))
+	namespace := test.NewTestNamespace(InWorkspace(workspace), WithLabel("kuadrant.dev/cluster-type", "glbc-ingresses"))
 
 	name := "echo"
 
@@ -181,7 +182,7 @@ func TestMetrics(t *testing.T) {
 	test.Expect(err).NotTo(HaveOccurred())
 
 	// Check a DNSRecord for the Ingress is updated with the expected Spec
-	test.Eventually(DNSRecord(test, namespace, name)).WithTimeout(TestTimeoutShort * 2).Should(And(
+	test.Eventually(DNSRecord(test, namespace, name)).WithTimeout(TestTimeoutMedium).Should(And(
 		WithTransform(DNSRecordEndpoints, HaveLen(1)),
 		WithTransform(DNSRecordEndpoints, ContainElement(MatchFieldsP(IgnoreExtras,
 			Fields{
@@ -339,7 +340,7 @@ func ingressManagedObjectTimeToAdmission(count uint64, duration float64) prometh
 	}
 }
 
-func certificatePendingRequestCount(issuer string, value float64) prometheus.MetricFamily {
+func certificatePendingRequestCount(issuer string, _ float64) prometheus.MetricFamily {
 	return prometheus.MetricFamily{
 		Name: stringP("glbc_tls_certificate_pending_request_count"),
 		Help: stringP("GLBC TLS certificate pending request count"),

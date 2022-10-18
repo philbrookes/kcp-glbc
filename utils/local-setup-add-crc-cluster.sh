@@ -82,7 +82,6 @@ KUBECONFIG=${KUBECONFIG_KCP_ADMIN} ${KUBECTL_KCP_BIN} workload sync ${CRC_CLUSTE
 KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl annotate --overwrite synctarget ${CRC_CLUSTER_NAME} featuregates.experimental.workload.kcp.dev/advancedscheduling='true'
 
 ${SED} -i '/^  - routes$/a \ \ - routes/custom-host' ${SYNC_TARGETS_DIR}/${CRC_CLUSTER_NAME}-syncer.yaml
-
 kubectl --context crc-admin apply -f ${SYNC_TARGETS_DIR}/${CRC_CLUSTER_NAME}-syncer.yaml
 
 # TODO: Figure out the right order of cmds, kubeconfig, context & env vars to deploy the observability operator

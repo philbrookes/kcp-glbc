@@ -24,6 +24,7 @@ source "${LOCAL_SETUP_DIR}"/.setupEnv
 
 DO_BREW="false"
 : ${USE_CRC_CLUSTER:="false"}
+: ${CREATE_KIND_ROUTE_SYNC_TARGET:="false"}
 
 usage() { echo "usage: ./local-setup.sh -c <number of clusters> <-b>" 1>&2; exit 1; }
 while getopts ":bc:" arg; do
@@ -81,6 +82,11 @@ KCP_SYNCER_IMAGE="ghcr.io/kcp-dev/kcp/syncer:${KCP_VERSION}"
 : ${SYNC_TARGETS_DIR:=${GLBC_DEPLOYMENTS_DIR}/sync-targets}
 : ${GLBC_DEPLOY_COMPONENTS:="cert-manager"}
 
+SED=sed
+if [[ "${OSTYPE}" =~ ^darwin.* ]]; then
+  SED=gsed
+fi
+
 for ((i=2;i<=$NUM_CLUSTERS;i++))
 do
   CLUSTERS="${CLUSTERS}${KIND_CLUSTER_PREFIX}${i} "
@@ -90,10 +96,12 @@ mkdir -p ${TEMP_DIR}
 
 [[ ! -z "$KUBECONFIG" ]] && KUBECONFIG="$KUBECONFIG" || KUBECONFIG="$HOME/.kube/config"
 
+# cluster, port80, port443, ingress?
 createCluster() {
   cluster=$1;
   port80=$2;
   port443=$3;
+  ingress=$4;
   cat <<EOF | ${KIND_BIN} create cluster --name ${cluster} --config=-
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -105,7 +113,7 @@ nodes:
     kind: InitConfiguration
     nodeRegistration:
       kubeletExtraArgs:
-        node-labels: "ingress-ready=true"
+        node-labels: "ingress-ready=${ingress}"
   extraPortMappings:
   - containerPort: 80
     hostPort: ${port80}
@@ -120,34 +128,45 @@ EOF
   ${KIND_BIN} get kubeconfig --internal --name=${cluster} > ${TEMP_DIR}/${cluster}.kubeconfig.internal
 }
 
+# cluster, port80, port443, ingress|routes
 createKINDCluster() {
-  [[ ! -z "$4" ]] && clusterName=${4} || clusterName=${1}
+  clusterName=${1}
+  [[ "$4" == "routes" ]] && ingress="false" || ingress="true"
   echo "Creating KIND Cluster (${clusterName})"
-  createCluster $1 $2 $3
+  createCluster $1 $2 $3 ${ingress}
 
   kubectl config use-context kind-${1}
 
-  echo "Deploying Ingress controller to ${1}"
-  VERSION=controller-v1.2.1
-  curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/"${VERSION}"/deploy/static/provider/kind/deploy.yaml | sed "s/--publish-status-address=localhost/--report-node-internal-ip-address/g" | kubectl apply -f -
-  kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class=true"
-
-# TODO: WIP Routes in kind
-#  kubectl apply -f https://raw.githubusercontent.com/openshift/router/master/deploy/route_crd.yaml
-#  kubectl apply -f https://raw.githubusercontent.com/openshift/router/master/deploy/router_rbac.yaml
-#  kubectl create namespace openshift-ingress -o yaml --dry-run=client | kubectl apply -f -
-#  kubectl apply -f https://raw.githubusercontent.com/openshift/router/master/deploy/router.yaml
-
-  echo "Waiting for deployments to be ready ..."
-  kubectl -n ingress-nginx wait --timeout=300s --for=condition=Available deployments --all
+  if [[ ${ingress} == "true" ]]; then
+    echo "Deploying Ingress controller to ${1}"
+    VERSION=controller-v1.2.1
+    curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/"${VERSION}"/deploy/static/provider/kind/deploy.yaml | sed "s/--publish-status-address=localhost/--report-node-internal-ip-address/g" | kubectl apply -f -
+    kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class=true"
+    echo "Waiting for deployments to be ready ..."
+    kubectl -n ingress-nginx wait --timeout=300s --for=condition=Available deployments --all
+  else
+    kubectl apply -f https://raw.githubusercontent.com/openshift/router/master/deploy/route_crd.yaml
+    kubectl apply -f https://raw.githubusercontent.com/openshift/router/master/deploy/router_rbac.yaml
+    kubectl create namespace openshift-ingress -o yaml --dry-run=client | kubectl apply -f -
+    kubectl apply -f https://raw.githubusercontent.com/openshift/router/master/deploy/router.yaml
+    echo "Waiting for deployments to be ready ..."
+    kubectl -n openshift-ingress wait --timeout=300s --for=condition=Available deployments --all
+  fi
 }
 
+#cluster, port80, port443, ingress|routes
 createKINDSyncTarget() {
   createKINDCluster $1 $2 $3 $4
-  echo "Deploying kcp syncer to ${1}"
+  echo "Deploying kcp syncer to ${1} with traffic type ${4}"
   KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl create namespace kcp-syncer --dry-run=client -o yaml | kubectl --kubeconfig=${KUBECONFIG_KCP_ADMIN} apply -f -
-  KUBECONFIG=${KUBECONFIG_KCP_ADMIN} ${KUBECTL_KCP_BIN} workload sync ${clusterName} --kcp-namespace kcp-syncer --syncer-image=${KCP_SYNCER_IMAGE} --resources=ingresses.networking.k8s.io,services --output-file ${SYNC_TARGETS_DIR}/${clusterName}-syncer.yaml
-
+  if [[ $4 == "routes" ]]; then
+    KUBECONFIG=${KUBECONFIG_KCP_ADMIN} ${KUBECTL_KCP_BIN} workload sync ${clusterName} --kcp-namespace kcp-syncer --syncer-image=${KCP_SYNCER_IMAGE} --resources=routes.route.openshift.io,services --output-file ${SYNC_TARGETS_DIR}/${clusterName}-syncer.yaml
+    KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl label --overwrite synctarget ${clusterName} kuadrant.dev/cluster-type=glbc-routes
+    ${SED} -i '/^  - routes$/a \ \ - routes/custom-host' ${SYNC_TARGETS_DIR}/${clusterName}-syncer.yaml
+  else 
+    KUBECONFIG=${KUBECONFIG_KCP_ADMIN} ${KUBECTL_KCP_BIN} workload sync ${clusterName} --kcp-namespace kcp-syncer --syncer-image=${KCP_SYNCER_IMAGE} --resources=ingresses.networking.k8s.io,services --output-file ${SYNC_TARGETS_DIR}/${clusterName}-syncer.yaml
+    KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl label --overwrite synctarget ${clusterName} kuadrant.dev/cluster-type=glbc-ingresses
+  fi
   # Enable advanced scheduling
   echo "Enabling advanced scheduling"
   KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl annotate --overwrite synctarget ${clusterName} featuregates.experimental.workload.kcp.dev/advancedscheduling='true'
@@ -198,29 +217,43 @@ KUBECONFIG=${KUBECONFIG_KCP_ADMIN} ${SCRIPT_DIR}/deploy.sh -k "${KUSTOMIZATION_D
 if [[ "$USE_CRC_CLUSTER" == "true" ]]; then
   CRC_CLUSTER_NAME=kcp-cluster-1 ${SCRIPT_DIR}/local-setup-add-crc-cluster.sh
 else
-  createKINDCluster "${KIND_CLUSTER_PREFIX}1" 8081 8444
+  KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl apply -f ${SCRIPT_DIR}/../config/deploy/local/locations_and_placements.yaml
+  # set up placements and namespaces for kubernetes and openshift clusters
+  KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl create namespace glbc-routes --dry-run -o yaml | KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl apply -f -
+  KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl create namespace glbc-ingresses --dry-run -o yaml | KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl apply -f -
+  KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl label --overwrite namespace glbc-routes kuadrant.dev/cluster-type=glbc-routes
+  KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl label --overwrite namespace glbc-ingresses kuadrant.dev/cluster-type=glbc-ingresses 
+  
+  createKINDCluster "${KIND_CLUSTER_PREFIX}1" 8081 8444 "ingress"
   kubectl apply -f ${GLBC_DEPLOYMENTS_DIR}/sync-targets/kcp-cluster-1-syncer.yaml
+  KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl label --overwrite synctarget "${KIND_CLUSTER_PREFIX}1" kuadrant.dev/cluster-type=glbc-ingresses
 fi
 
 KUBECONFIG=${KUBECONFIG_KCP_ADMIN} ${KUBECTL_KCP_BIN} workspace use "${GLBC_WORKSPACE}"
 
 KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl get synctargets
-KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl wait --timeout=300s --for=condition=Ready=true synctargets "${KIND_CLUSTER_PREFIX}1"
 
 #4. Create User sync target clusters and wait for them to be ready
+port80=8082
+port443=8445
 if [ -n "$CLUSTERS" ]; then
   echo "Creating $NUM_CLUSTERS additional kcp SyncTarget cluster(s)"
-  port80=8082
-  port443=8445
   for cluster in $CLUSTERS; do
-    createKINDSyncTarget "$cluster" $port80 $port443
+    createKINDSyncTarget "$cluster" $port80 $port443 "ingress"
     port80=$((port80 + 1))
     port443=$((port443 + 1))
   done
-  KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl wait --timeout=300s --for=condition=Ready=true synctargets $CLUSTERS
 fi
 
+if [[ "$CREATE_KIND_ROUTE_SYNC_TARGET" == "true" ]]; then 
+      #increment in case they are used again later
+      port80=$((port80 + 1))
+      port443=$((port443 + 1))
+    createKINDSyncTarget ${KIND_CLUSTER_PREFIX}"routes" $port80 $port443 "routes"
+fi 
+
 #5.Create the GLBC APIExport after all the clusters have synced and deploy GLBC components (cert-manager)
+KUBECONFIG=${KUBECONFIG_KCP_ADMIN} kubectl wait --timeout=300s --for=condition=Ready=true --all synctargets
 KUBECONFIG=${KUBECONFIG_KCP_ADMIN} ${SCRIPT_DIR}/deploy.sh -k "${KUSTOMIZATION_DIR}" -c ${GLBC_DEPLOY_COMPONENTS}
 
 #6. Miscellaneous local development specific steps

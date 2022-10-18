@@ -129,6 +129,12 @@ func NewController(config *ControllerConfig) *Controller {
 		Handler: cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				certificate := obj.(*certman.Certificate)
+				_, err := c.getIngressByKey(certificate.Annotations[traffic.ANNOTATION_TRAFFIC_KEY])
+				if k8serrors.IsNotFound(err) {
+					c.Logger.V(3).Info("cert is not for an ingress", "cert", certificate.Name, "obj key", certificate.Annotations[traffic.ANNOTATION_TRAFFIC_KEY])
+					//not connected to an ingress, do not handle events
+					return
+				}
 				traffic.CertificateAddedHandler(certificate)
 			},
 			UpdateFunc: func(oldObj, newObj interface{}) {
@@ -137,23 +143,32 @@ func NewController(config *ControllerConfig) *Controller {
 				if oldCert.ResourceVersion == newCert.ResourceVersion {
 					return
 				}
+				ingress, err := c.getIngressByKey(newCert.Annotations[traffic.ANNOTATION_TRAFFIC_KEY])
+				if k8serrors.IsNotFound(err) {
+					c.Logger.V(3).Info("cert is not for an ingress", "cert", newCert.Name, "obj key", newCert.Annotations[traffic.ANNOTATION_TRAFFIC_KEY])
+					//not connected to an ingress, do not handle events
+					return
+				}
 
 				enq := traffic.CertificateUpdatedHandler(oldCert, newCert)
 				if enq {
-
-					ingressKey := newCert.Annotations[traffic.ANNOTATION_TRAFFIC_KEY]
-					c.Logger.V(3).Info("reqeuing ingress certificate updated", "certificate", newCert.Name, "ingresskey", ingressKey)
-					c.enqueueIngressByKey(ingressKey)
+					c.Logger.V(3).Info("requeueing ingress certificate updated", "certificate", newCert.Name, "ingress", ingress.Name)
+					c.Enqueue(ingress)
 				}
 			},
 			DeleteFunc: func(obj interface{}) {
 				certificate := obj.(*certman.Certificate)
+				ingress, err := c.getIngressByKey(certificate.Annotations[traffic.ANNOTATION_TRAFFIC_KEY])
+				if k8serrors.IsNotFound(err) {
+					c.Logger.V(3).Info("cert is not for an ingress", "cert", certificate.Name, "obj key", certificate.Annotations[traffic.ANNOTATION_TRAFFIC_KEY])
+					//not connected to an ingress, do not handle events
+					return
+				}
 				// handle metric requeue ingress if the cert is deleted and the ingress still exists
 				// covers a manual deletion of cert and will ensure a new cert is created
 				traffic.CertificateDeletedHandler(certificate)
-				ingressKey := certificate.Annotations[traffic.ANNOTATION_TRAFFIC_KEY]
-				c.Logger.V(3).Info("reqeuing ingress certificate deleted", "certificate", certificate.Name, "ingresskey", ingressKey)
-				c.enqueueIngressByKey(ingressKey)
+				c.Logger.V(3).Info("requeueing ingress certificate deleted", "certificate", certificate.Name, "ingress", ingress.Name)
+				c.Enqueue(ingress)
 			},
 		},
 	})
@@ -201,13 +216,13 @@ func NewController(config *ControllerConfig) *Controller {
 	c.KuadrantInformerFactory.Kuadrant().V1().DNSRecords().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		DeleteFunc: func(obj interface{}) {
 			//when a dns record is deleted we requeue the ingress (currently owner refs don't work in KCP)
-			dns := obj.(*kuadrantv1.DNSRecord)
-			if dns.Annotations == nil {
+			dnsRecords := obj.(*kuadrantv1.DNSRecord)
+			if dnsRecords.Annotations == nil {
 				return
 			}
 			// if we have a ingress key stored we can re queue the ingresss
-			if ingressKey, ok := dns.Annotations[traffic.ANNOTATION_TRAFFIC_KEY]; ok {
-				c.Logger.V(3).Info("reqeuing ingress dns record deleted", "cluster", logicalcluster.From(dns), "namespace", dns.Namespace, "name", dns.Name, "ingresskey", ingressKey)
+			if ingressKey, ok := dnsRecords.Annotations[traffic.ANNOTATION_TRAFFIC_KEY]; ok {
+				c.Logger.V(3).Info("reqeuing ingress dns record deleted", "cluster", logicalcluster.From(dnsRecords), "namespace", dnsRecords.Namespace, "name", dnsRecords.Name, "ingresskey", ingressKey)
 				c.enqueueIngressByKey(ingressKey)
 			}
 		},
@@ -262,17 +277,18 @@ type Controller struct {
 	KuadrantInformerFactory   kuadrantInformer.SharedInformerFactory
 }
 
-func (c *Controller) enqueueIngressByKey(key string) {
+func (c *Controller) enqueueIngressByKey(key string) bool {
 	ingress, err := c.getIngressByKey(key)
 	//no need to handle not found as the ingress is gone
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
-			return
+			return false
 		}
 		runtime.HandleError(err)
-		return
+		return false
 	}
 	c.Enqueue(ingress)
+	return true
 }
 
 func (c *Controller) process(ctx context.Context, key string) error {
@@ -364,7 +380,7 @@ func (c *Controller) ingressesFromDomainVerification(obj interface{}) ([]*networ
 }
 
 func (c *Controller) getDomainVerifications(ctx context.Context, accessor traffic.Interface) (*kuadrantv1.DomainVerificationList, error) {
-	return c.kuadrantClient.Cluster(logicalcluster.From(accessor)).KuadrantV1().DomainVerifications().List(ctx, metav1.ListOptions{})
+	return c.kuadrantClient.Cluster(accessor.GetLogicalCluster()).KuadrantV1().DomainVerifications().List(ctx, metav1.ListOptions{})
 }
 
 func (c *Controller) deleteTLSSecret(ctx context.Context, workspace logicalcluster.Name, namespace, name string) error {

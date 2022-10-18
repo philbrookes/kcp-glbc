@@ -1,0 +1,64 @@
+---
+apiVersion: scheduling.kcp.dev/v1alpha1
+kind: Location
+metadata:
+  name: glbc-ingresses
+  labels:
+    kuadrant.dev/location: glbc-ingresses
+spec:
+  instanceSelector:
+    matchLabels:
+      kuadrant.dev/cluster-type: glbc-ingresses
+  resource:
+    group: workload.kcp.dev
+    resource: synctargets
+    version: v1alpha1
+---
+apiVersion: scheduling.kcp.dev/v1alpha1
+kind: Location
+metadata:
+  name: glbc-routes
+  labels:
+    kuadrant.dev/location: glbc-routes
+spec:
+  instanceSelector:
+    matchLabels:
+      kuadrant.dev/cluster-type: glbc-routes
+  resource:
+    group: workload.kcp.dev
+    resource: synctargets
+    version: v1alpha1
+---
+apiVersion: scheduling.kcp.dev/v1alpha1
+kind: Placement
+metadata:
+  name: glbc-ingresses
+spec:
+  locationSelectors:
+    - matchLabels:
+        kuadrant.dev/location: glbc-ingresses
+  locationResource:
+    group: workload.kcp.dev
+    resource: synctargets
+    version: v1alpha1
+  namespaceSelector:
+    matchLabels:
+      kuadrant.dev/cluster-type: glbc-ingresses
+  locationWorkspace: root:kuadrant
+---
+apiVersion: scheduling.kcp.dev/v1alpha1
+kind: Placement
+metadata:
+  name: glbc-routes
+spec:
+  locationSelectors:
+    - matchLabels:
+        kuadrant.dev/location: glbc-routes
+  locationResource:
+    group: workload.kcp.dev
+    resource: synctargets
+    version: v1alpha1
+  namespaceSelector:
+    matchLabels:
+      kuadrant.dev/cluster-type: glbc-routes
+  locationWorkspace: root:kuadrant

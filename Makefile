@@ -5,6 +5,7 @@ SHELL := /usr/bin/env bash
 NUM_CLUSTERS ?= 1
 DO_BREW := true
 USE_CRC := false
+CREATE_KIND_ROUTE_SYNC_TARGET := false
 RUN_GLBC := false
 KCP_BRANCH := release-0.9
 
@@ -203,6 +204,7 @@ endif
 .PHONY: local-setup
 local-setup: export KCP_VERSION=${KCP_BRANCH}
 local-setup: export USE_CRC_CLUSTER=${USE_CRC}
+local-setup: export CREATE_KIND_ROUTE_SYNC_TARGET=${$CREATE_KIND_ROUTE_SYNC_TARGET}
 local-setup: export DEPLOY_GLBC=${RUN_GLBC} # Optionally run GLBC after local-setup is done.
 local-setup: clean kind kcp kustomize helm build ## Setup kcp locally using kind.
 	./utils/local-setup.sh -c ${NUM_CLUSTERS} ${LOCAL_SETUP_FLAGS}

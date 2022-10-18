@@ -34,9 +34,10 @@ func TestIngress(t *testing.T) {
 
 	// Create GLBC APIBinding in workspace
 	test.CreateGLBCAPIBindings(workspace, GLBCWorkspace, GLBCExportName)
+	test.CreatePlacements(workspace)
 
 	// Create a namespace
-	namespace := test.NewTestNamespace(InWorkspace(workspace))
+	namespace := test.NewTestNamespace(InWorkspace(workspace), WithLabel("kuadrant.dev/cluster-type", "glbc-ingresses"))
 
 	name := "echo"
 

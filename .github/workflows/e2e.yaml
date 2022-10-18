@@ -71,29 +71,29 @@ jobs:
           KIND_VERSION=$(cat Makefile | grep "KIND_VERSION ?=" | awk '{print $3}')
           echo "KIND_VERSION=${KIND_VERSION}" >> $GITHUB_ENV
           echo ${KIND_VERSION}
-      - name: Kubernetes KinD Cluster 1
+      - name: Kubernetes KinD ingress Cluster
         uses: helm/kind-action@v1.2.0
         with:
-          cluster_name: kcp-cluster-1
+          cluster_name: kcp-ingress-cluster
           node_image: kindest/node:v1.21.1@sha256:fae9a58f17f18f06aeac9772ca8b5ac680ebbed985e266f711d936e91d113bad
           version: ${{ env.KIND_VERSION }}
-          config: ./test/e2e/kind.yaml
-      - name: Kubernetes KinD Cluster 2
+          config: ./test/e2e/kind-ingress.yaml
+      - name: Kubernetes KinD Routes Cluster
         uses: helm/kind-action@v1.2.0
         with:
-          cluster_name: kcp-cluster-2
+          cluster_name: kcp-routes-cluster
           node_image: kindest/node:v1.21.1@sha256:fae9a58f17f18f06aeac9772ca8b5ac680ebbed985e266f711d936e91d113bad
           version: ${{ env.KIND_VERSION }}
-          config: ./test/e2e/kind.yaml
+          config: ./test/e2e/kind-routes.yaml
       - name: Info
         run: |
-          echo "Cluster 1:"
-          kubectl --context kind-kcp-cluster-1 cluster-info
-          kubectl --context kind-kcp-cluster-1 describe nodes
+          echo "Ingress Cluster:"
+          kubectl --context kind-kcp-ingress-cluster cluster-info
+          kubectl --context kind-kcp-ingress-cluster describe nodes
 
-          echo "Cluster 2:"
-          kubectl --context kind-kcp-cluster-2 cluster-info
-          kubectl --context kind-kcp-cluster-2 describe nodes
+          echo "Routes Cluster:"
+          kubectl --context kind-kcp-routes-cluster cluster-info
+          kubectl --context kind-kcp-routes-cluster describe nodes
       - name: Run GLBC and KCP
         run: |
           echo "Building KCP"
@@ -111,16 +111,18 @@ jobs:
           echo "Deploying Ingress controller to KinD workload clusters"
           VERSION=controller-v1.2.1
 
-          kubectl config use-context kind-kcp-cluster-1
+          kubectl config use-context kind-kcp-ingress-cluster
           curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/"${VERSION}"/deploy/static/provider/kind/deploy.yaml | sed "s/--publish-status-address=localhost/--report-node-internal-ip-address/g" | kubectl apply -f -
           kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class=true"
           kubectl -n ingress-nginx wait --timeout=300s --for=condition=Available deployments --all
 
-          kubectl config use-context kind-kcp-cluster-2
-          curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/"${VERSION}"/deploy/static/provider/kind/deploy.yaml | sed "s/--publish-status-address=localhost/--report-node-internal-ip-address/g" | kubectl apply -f -
-          kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class=true"
-          kubectl -n ingress-nginx wait --timeout=300s --for=condition=Available deployments --all
-
+          kubectl config use-context kind-kcp-routes-cluster
+          kubectl apply -f https://raw.githubusercontent.com/openshift/router/master/deploy/route_crd.yaml
+          kubectl apply -f https://raw.githubusercontent.com/openshift/router/master/deploy/router_rbac.yaml
+          kubectl create namespace openshift-ingress -o yaml --dry-run=client | kubectl apply -f -
+          kubectl apply -f https://raw.githubusercontent.com/openshift/router/master/deploy/router.yaml
+          kubectl -n openshift-ingress wait --timeout=300s --for=condition=Available deployments --all
+    
           KCP_LOG_FILE="${TEMP_DIR}"/kcp.log
           echo "KCP_LOG_FILE=${KCP_LOG_FILE}" >> $GITHUB_ENV
           echo "Starting KCP, sending logs to ${KCP_LOG_FILE}"
@@ -144,38 +146,52 @@ jobs:
           KUBECONFIG=.kcp/admin.kubeconfig ./bin/kubectl-kcp workspace create "kuadrant" --type universal --enter
 
           echo "Setup workspace root:kuadrant"
-          KUBECONFIG=.kcp/admin.kubeconfig ./utils/deploy.sh -k ${KUSTOMIZATION_DIR} -c "none"
+          KUBECONFIG=.kcp/admin.kubeconfig ./utils/deploy.sh -s kcp-ingress-cluster -k ${KUSTOMIZATION_DIR} -c "none"
 
           echo "Applying syncer to the GLBC physical cluster"
-          kubectl config use-context kind-kcp-cluster-1
-          kubectl apply -f ${SYNC_TARGETS_DIR}/kcp-cluster-1-syncer.yaml
+          kubectl config use-context kind-kcp-ingress-cluster
+          kubectl apply -f ${SYNC_TARGETS_DIR}/kcp-ingress-cluster-syncer.yaml
 
           echo "Checking glbc synctarget is ready"
-          KUBECONFIG=.kcp/admin.kubeconfig kubectl wait --timeout=300s --for=condition=Ready=true synctargets "kcp-cluster-1"
+          KUBECONFIG=.kcp/admin.kubeconfig kubectl wait --timeout=300s --for=condition=Ready=true synctargets "kcp-ingress-cluster"
 
           echo "Create User sync targets"
-          export KCP_SYNCER_IMAGE=ghcr.io/kcp-dev/kcp/syncer:release-0.7
-          KUBECONFIG=.kcp/admin.kubeconfig ./bin/kubectl-kcp workload sync kcp-cluster-1 --kcp-namespace kcp-syncer --syncer-image=${KCP_SYNCER_IMAGE} --resources=ingresses.networking.k8s.io,services --output-file ${SYNC_TARGETS_DIR}/kcp-cluster-1-syncer.yaml
-          KUBECONFIG=.kcp/admin.kubeconfig ./bin/kubectl-kcp workload sync kcp-cluster-2 --kcp-namespace kcp-syncer --syncer-image=${KCP_SYNCER_IMAGE} --resources=ingresses.networking.k8s.io,services --output-file ${SYNC_TARGETS_DIR}/kcp-cluster-2-syncer.yaml
+          export KCP_SYNCER_IMAGE=ghcr.io/kcp-dev/kcp/syncer:release-0.9
+          KUBECONFIG=.kcp/admin.kubeconfig ./bin/kubectl-kcp workload sync kcp-ingress-cluster --kcp-namespace kcp-syncer --syncer-image=${KCP_SYNCER_IMAGE} --resources=ingresses.networking.k8s.io,services --output-file ${SYNC_TARGETS_DIR}/kcp-ingress-cluster-syncer.yaml
+          KUBECONFIG=.kcp/admin.kubeconfig ./bin/kubectl-kcp workload sync kcp-routes-cluster --kcp-namespace kcp-syncer --syncer-image=${KCP_SYNCER_IMAGE} --resources=routes.route.openshift.io,services --output-file ${SYNC_TARGETS_DIR}/kcp-routes-cluster-syncer.yaml
 
+          echo "Create placements and locations"
+          KUBECONFIG=.kcp/admin.kubeconfig  kubectl apply -f ./config/deploy/local/locations_and_placements.yaml
+          
+          echo "Apply placement labels"
+          KUBECONFIG=.kcp/admin.kubeconfig kubectl label --overwrite synctarget kcp-ingress-cluster kuadrant.dev/cluster-type=glbc-ingresses
+          KUBECONFIG=.kcp/admin.kubeconfig kubectl label --overwrite synctarget kcp-routes-cluster kuadrant.dev/cluster-type=glbc-routes
+          
           echo "Enabling advanced scheduling on user sync targets"
-          KUBECONFIG=.kcp/admin.kubeconfig kubectl annotate --overwrite synctarget kcp-cluster-1 featuregates.experimental.workload.kcp.dev/advancedscheduling='true'
-          KUBECONFIG=.kcp/admin.kubeconfig kubectl annotate --overwrite synctarget kcp-cluster-2 featuregates.experimental.workload.kcp.dev/advancedscheduling='true'
-
+          KUBECONFIG=.kcp/admin.kubeconfig kubectl annotate --overwrite synctarget kcp-ingress-cluster featuregates.experimental.workload.kcp.dev/advancedscheduling='true'
+          KUBECONFIG=.kcp/admin.kubeconfig kubectl annotate --overwrite synctarget kcp-routes-cluster featuregates.experimental.workload.kcp.dev/advancedscheduling='true'
+          
           echo "Applying syncers to the user physical clusters"
-          kubectl --context kind-kcp-cluster-1 apply -f ${SYNC_TARGETS_DIR}/kcp-cluster-1-syncer.yaml
-          kubectl --context kind-kcp-cluster-2 apply -f ${SYNC_TARGETS_DIR}/kcp-cluster-2-syncer.yaml
+          kubectl --context kind-kcp-ingress-cluster apply -f ${SYNC_TARGETS_DIR}/kcp-ingress-cluster-syncer.yaml
+          
+          sed -i '/^  - routes$/a \ \ - routes/custom-host' ${SYNC_TARGETS_DIR}/kcp-routes-cluster-syncer.yaml
+          kubectl --context kind-kcp-routes-cluster apply -f ${SYNC_TARGETS_DIR}/kcp-routes-cluster-syncer.yaml
 
           echo "Checking all user synctargets are ready"
-          KUBECONFIG=.kcp/admin.kubeconfig kubectl wait --timeout=300s --for=condition=Ready=true synctargets kcp-cluster-1 kcp-cluster-2
+          KUBECONFIG=.kcp/admin.kubeconfig kubectl wait --timeout=300s --for=condition=Ready=true synctargets kcp-ingress-cluster kcp-routes-cluster
 
-          echo "Check synctarget status and labels"
-          KUBECONFIG=.kcp/admin.kubeconfig kubectl get synctargets -o wide --show-labels
-
-          echo "Check synctarget annotations"
-          KUBECONFIG=.kcp/admin.kubeconfig kubectl get synctargets kcp-cluster-1 -o json | jq .metadata.annotations
-          KUBECONFIG=.kcp/admin.kubeconfig kubectl get synctargets kcp-cluster-2 -o json | jq .metadata.annotations
-
+          echo "Check synctargets"
+          KUBECONFIG=.kcp/admin.kubeconfig kubectl get synctargets kcp-ingress-cluster -o json
+          KUBECONFIG=.kcp/admin.kubeconfig kubectl get synctargets kcp-routes-cluster -o json
+          
+          echo "Check placements"
+          KUBECONFIG=.kcp/admin.kubeconfig kubectl get placement glbc-ingresses -o yaml
+          KUBECONFIG=.kcp/admin.kubeconfig kubectl get placement glbc-routes -o yaml
+          
+          echo "Check locations"
+          KUBECONFIG=.kcp/admin.kubeconfig kubectl get location glbc-ingresses -o yaml
+          KUBECONFIG=.kcp/admin.kubeconfig kubectl get location glbc-routes -o yaml
+          
           echo "Create the GLBC APIExport after all the clusters have synced and deploy GLBC components (cert-manager)"
           KUBECONFIG=.kcp/admin.kubeconfig ./utils/deploy.sh -k ${KUSTOMIZATION_DIR} -c "cert-manager"
 
@@ -232,8 +248,8 @@ jobs:
           export $(cat ./config/deploy/local/kcp-glbc/controller-config.env.ci | xargs)
 
           echo "Creating cluster kubeconfigs in ${CLUSTERS_KUBECONFIG_DIR}"
-          kind get kubeconfig --name=kcp-cluster-1 > "${CLUSTERS_KUBECONFIG_DIR}"/kcp-cluster-1.kubeconfig
-          kind get kubeconfig --name=kcp-cluster-2 > "${CLUSTERS_KUBECONFIG_DIR}"/kcp-cluster-2.kubeconfig
+          kind get kubeconfig --name=kcp-ingress-cluster > "${CLUSTERS_KUBECONFIG_DIR}"/kcp-ingress-cluster.kubeconfig
+          kind get kubeconfig --name=kcp-routes-cluster > "${CLUSTERS_KUBECONFIG_DIR}"/kcp-routes-cluster.kubeconfig
 
           # Then run e2e tests
           make e2e

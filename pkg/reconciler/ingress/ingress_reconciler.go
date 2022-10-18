@@ -64,7 +64,7 @@ func (c *Controller) reconcile(ctx context.Context, ingress traffic.Interface) e
 	for _, r := range reconcilers {
 		status, err := r.Reconcile(ctx, ingress)
 		if err != nil {
-			c.Logger.Error(err, "reconciler error: ", ingress)
+			c.Logger.Error(err, "reconciler error: ", "ingress", ingress, "reconciler", r.GetName())
 			errs = append(errs, err)
 		}
 		if status == traffic.ReconcileStatusStop {

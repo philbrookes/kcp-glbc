@@ -10,6 +10,7 @@ import (
 	certman "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
 
+	"github.com/kuadrant/kcp-glbc/pkg/_internal/log"
 	"github.com/kuadrant/kcp-glbc/pkg/_internal/metadata"
 	basereconciler "github.com/kuadrant/kcp-glbc/pkg/reconciler"
 
@@ -77,6 +78,7 @@ func CertificateUpdatedHandler(oldCert, newCert *certman.Certificate) Enqueue {
 		// if it is the first cert decrement the counter
 		//sometimes we see the new cert move to ready before the revision is incremented. So it can be at revision 0
 		if revision(newCert) == 1 || revision(newCert) == 0 {
+			log.Logger.Info("Incrementing successful certificate request metric for issuer: " + issuer.Name + ", domain: " + newCert.Spec.CommonName)
 			TlsCertificateRequestCount.WithLabelValues(issuer.Name).Dec()
 			TlsCertificateRequestTotal.WithLabelValues(issuer.Name, resultLabelSucceeded).Inc()
 			TlsCertificateIssuanceDuration.
@@ -161,6 +163,7 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, accessor Interfac
 	tlsSecretName := TLSSecretName(accessor)
 	//set the accessor key on the certificate to help us with locating the accessor later
 	annotations[ANNOTATION_TRAFFIC_KEY] = key
+	annotations[ANNOTATION_TRAFFIC_KIND] = accessor.GetKind()
 	certReq := tls.CertificateRequest{
 		Name:        CertificateName(accessor),
 		Labels:      labels,
@@ -183,7 +186,7 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, accessor Interfac
 
 	err = r.CreateCertificate(ctx, certReq)
 	if err != nil && !errors.IsAlreadyExists(err) {
-		return ReconcileStatusStop, err
+		return ReconcileStatusStop, fmt.Errorf("certificate reconciler: error creating certificate, error: %v", err.Error())
 	}
 	metadata.AddAnnotation(accessor, ANNOTATION_CERTIFICATE_STATE, "requested")
 	if errors.IsAlreadyExists(err) {
@@ -194,13 +197,13 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, accessor Interfac
 				// cetificate not ready so update the status and allow it continue Reconcile. Will be requeued once certificate becomes ready
 				status, err := r.GetCertificateStatus(ctx, certReq)
 				if err != nil {
-					return ReconcileStatusStop, err
+					return ReconcileStatusStop, fmt.Errorf("certificate reconciler: error getting certificate status error: %v", err.Error())
 				}
 				//NB we stop reconcile until the certificate is ready. We don't want things like DNS set up until the certificate is ready
 				metadata.AddAnnotation(accessor, ANNOTATION_CERTIFICATE_STATE, string(status))
 				return ReconcileStatusContinue, nil
 			}
-			return ReconcileStatusStop, err
+			return ReconcileStatusStop, fmt.Errorf("certificate reconciler: error getting certificate secret error: %v", err.Error())
 		}
 		metadata.AddAnnotation(accessor, ANNOTATION_CERTIFICATE_STATE, "ready") // todo remove hardcoded string
 		//copy over the secret to the accessor namesapce
@@ -219,17 +222,17 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, accessor Interfac
 		scopy.Namespace = accessor.GetNamespace()
 		scopy.Name = tlsSecretName
 		if err := r.CopySecret(ctx, logicalcluster.From(accessor), accessor.GetNamespace(), scopy); err != nil {
-			return ReconcileStatusStop, err
+			return ReconcileStatusStop, fmt.Errorf("certificate reconciler: error copying secret error: %v", err.Error())
 		}
 	}
 	if err != nil && !errors.IsAlreadyExists(err) {
-		return ReconcileStatusStop, err
+		return ReconcileStatusStop, fmt.Errorf("certificate reconciler: error creating certificate error: %v", err.Error())
 	}
 
 	// set tls setting on the accessor
 	certSecret, err := r.GetSecret(ctx, tlsSecretName, accessor.GetNamespace(), accessor.GetLogicalCluster())
 	if err != nil {
-		return ReconcileStatusStop, err
+		return ReconcileStatusStop, fmt.Errorf("certificate reconciler: error getting secret to set on accessor error: %v", err.Error())
 	}
 	accessor.AddTLS(certReq.Host, certSecret)
 

@@ -19,7 +19,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/kcp-dev/kcp/pkg/apis/scheduling/v1alpha1"
 	"github.com/onsi/gomega"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -42,6 +44,7 @@ type Test interface {
 	gomega.Gomega
 
 	CreateGLBCAPIBindings(*tenancyv1beta1.Workspace, logicalcluster.Name, string)
+	CreatePlacements(workspace *tenancyv1beta1.Workspace)
 	NewAPIBinding(name string, options ...Option) *apisv1alpha1.APIBinding
 	NewSyncTarget(name string, options ...Option) *workloadv1alpha1.SyncTarget
 	NewTestNamespace(...Option) *corev1.Namespace
@@ -102,6 +105,52 @@ func (t *T) Client() Client {
 	return t.client
 }
 
+func generatePlacement(name string, targetWorkspace *tenancyv1beta1.Workspace, locationSelectors, namespaceSelectors map[string]string) (*v1alpha1.Placement, error) {
+	placement := &v1alpha1.Placement{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: v1alpha1.PlacementSpec{
+			LocationSelectors: []metav1.LabelSelector{{MatchLabels: locationSelectors}},
+			LocationResource:  v1alpha1.GroupVersionResource{Group: "workload.kcp.dev", Resource: "synctargets", Version: "v1alpha1"},
+			NamespaceSelector: &metav1.LabelSelector{MatchLabels: namespaceSelectors},
+			LocationWorkspace: TestOrganization.String(),
+		},
+	}
+
+	err := InWorkspace(targetWorkspace).applyTo(placement)
+
+	return placement, err
+}
+
+func (t *T) CreatePlacements(targetWorkspace *tenancyv1beta1.Workspace) {
+	placement, err := generatePlacement(
+		"glbc-ingresses",
+		targetWorkspace,
+		map[string]string{"kuadrant.dev/location": "glbc-ingresses"},
+		map[string]string{"kuadrant.dev/cluster-type": "glbc-ingresses"},
+	)
+	if err != nil {
+		t.Expect(err).NotTo(gomega.HaveOccurred())
+	}
+
+	_, err = t.Client().Kcp().Cluster(logicalcluster.From(placement)).SchedulingV1alpha1().Placements().Create(t.Ctx(), placement, metav1.CreateOptions{})
+	if err != nil {
+		t.Expect(err).NotTo(gomega.HaveOccurred())
+	}
+	placement, err = generatePlacement(
+		"glbc-routes",
+		targetWorkspace,
+		map[string]string{"kuadrant.dev/location": "glbc-routes"},
+		map[string]string{"kuadrant.dev/cluster-type": "glbc-routes"},
+	)
+	if err != nil {
+		t.Expect(err).NotTo(gomega.HaveOccurred())
+	}
+
+	_, err = t.Client().Kcp().Cluster(logicalcluster.From(placement)).SchedulingV1alpha1().Placements().Create(t.Ctx(), placement, metav1.CreateOptions{})
+	if err != nil {
+		t.Expect(err).NotTo(gomega.HaveOccurred())
+	}
+}
 func (t *T) CreateGLBCAPIBindings(targetWorkspace *tenancyv1beta1.Workspace, glbcWorkspace logicalcluster.Name, glbcExportName string) {
 
 	t.T().Logf("Binding to kubernetes APIExport from %s to %s", glbcWorkspace.String(), targetWorkspace.Name)

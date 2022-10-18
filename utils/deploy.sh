@@ -43,13 +43,14 @@ help()
   # Display Help
   echo "Prepares a KCP workspace and deploys GLBC and its dependant components into it."
   echo
-  echo "Syntax: deploy.sh [-c|k|m|n|h|w]"
+  echo "Syntax: deploy.sh [-c|k|m|n|h|w|s]"
   echo "options:"
   echo "c     Components to deploy (default: ${DEPLOY_COMPONENTS})"
   echo "k     GLBC deployment kustomization directory, must contain a kcp-glbc and cert-manager sub directory (default: ${KUSTOMIZATION_DIR})"
   echo "n     Namespace glbc is being deployed into (default: ${GLBC_NAMESPACE})"
   echo "h     Print this Help."
   echo "w     Workspace to deploy glbc into (default: ${GLBC_WORKSPACE})."
+  echo "s     synctarget name"
   echo
 }
 
@@ -139,7 +140,7 @@ deploy_glbc() {
 # Script Start                                             #
 ############################################################
 
-while getopts "c:k:n:hw:W:" arg; do
+while getopts "c:k:n:hw:W:s:" arg; do
   case "${arg}" in
     c)
       DEPLOY_COMPONENTS=${OPTARG}
@@ -156,6 +157,9 @@ while getopts "c:k:n:hw:W:" arg; do
       ;;
     w)
       GLBC_WORKSPACE=${OPTARG}
+      ;;
+    s)
+      GLBC_SYNC_TARGET_NAME=${OPTARG}
       ;;
     *)
       help
