@@ -15,6 +15,7 @@ limitations under the License.
 package support
 
 import (
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/client-go/rest"
@@ -23,6 +24,7 @@ import (
 	kcp "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
 
 	certmanclient "github.com/jetstack/cert-manager/pkg/client/clientset/versioned"
+
 	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
 )
 
@@ -31,6 +33,7 @@ type Client interface {
 	Kcp() kcp.ClusterInterface
 	Kuadrant() kuadrantv1.ClusterInterface
 	Certs() certmanclient.Interface
+	Dynamic() dynamic.ClusterInterface
 	GetConfig() *rest.Config
 }
 
@@ -40,6 +43,7 @@ type client struct {
 	kuadrant kuadrantv1.ClusterInterface
 	certs    certmanclient.Interface
 	config   *rest.Config
+	dynamic  dynamic.ClusterInterface
 }
 
 func (c *client) Certs() certmanclient.Interface {
@@ -56,6 +60,10 @@ func (c *client) Kcp() kcp.ClusterInterface {
 
 func (c *client) Kuadrant() kuadrantv1.ClusterInterface {
 	return c.kuadrant
+}
+
+func (c *client) Dynamic() dynamic.ClusterInterface {
+	return c.dynamic
 }
 
 func (c *client) GetConfig() *rest.Config {
@@ -92,11 +100,16 @@ func newTestClient() (Client, error) {
 		return nil, err
 	}
 
+	dynamicClient, err := dynamic.NewClusterForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
 	return &client{
 		core:     kubeClient,
 		kcp:      kcpClient,
 		kuadrant: kuandrantClient,
 		certs:    certClient,
 		config:   cfg,
+		dynamic:  dynamicClient,
 	}, nil
 }

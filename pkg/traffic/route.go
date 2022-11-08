@@ -14,6 +14,7 @@ import (
 
 	workload "github.com/kcp-dev/kcp/pkg/apis/workload/v1alpha1"
 
+	"github.com/kuadrant/kcp-glbc/pkg/_internal/log"
 	"github.com/kuadrant/kcp-glbc/pkg/_internal/metadata"
 	v1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
 	"github.com/kuadrant/kcp-glbc/pkg/dns"
@@ -48,7 +49,19 @@ func (a *Route) GetSpec() interface{} {
 }
 
 func (a *Route) TMCEnabed() bool {
-	return tmcEnabled(a)
+	// check the annotations for status
+	if tmcEnabled(a) {
+		return true
+	}
+	enabled := true
+	//once the status gets set to something other than the glbc provided host we are sure it is not advanced scheduling
+	if len(a.Status.Ingress) == 1 {
+		if a.Status.Ingress[0].Host != "" {
+			host := a.GetHCGHost()
+			enabled = a.Status.Ingress[0].Host == host
+		}
+	}
+	return enabled
 }
 
 func (a *Route) GetSyncTargets() []string {
@@ -126,8 +139,15 @@ func (a *Route) GetDNSTargets() ([]dns.Target, error) {
 	}
 	for cluster, status := range statuses {
 		for _, ingress := range status.Ingress {
+			host := ""
 			// with a Route it is always a host
-			host := ingress.RouterCanonicalHostname
+			if ingress.RouterCanonicalHostname != "" {
+				host = ingress.RouterCanonicalHostname
+			} else if ingress.Host != "" {
+				host = ingress.Host
+			} else {
+				return nil, fmt.Errorf("no usable host value on route (%v) status", a.Name)
+			}
 			target := dns.Target{Value: host, TargetType: dns.TargetTypeHost, Cluster: cluster.String()}
 			dnsTargets = append(dnsTargets, target)
 		}
@@ -182,6 +202,7 @@ func (a *Route) ProcessCustomHosts(ctx context.Context, dvs *v1.DomainVerificati
 		shadow.Name = a.GetName() + "-shadow"
 		metadata.AddAnnotation(shadow, ANNOTATION_IS_GLBC_SHADOW, "true")
 		metadata.RemoveAnnotation(shadow, ANNOTATION_PENDING_CUSTOM_HOSTS)
+
 		t := true
 		shadow.OwnerReferences = append(shadow.OwnerReferences, metav1.OwnerReference{
 			APIVersion:         a.APIVersion,
@@ -195,10 +216,11 @@ func (a *Route) ProcessCustomHosts(ctx context.Context, dvs *v1.DomainVerificati
 		if err != nil {
 			return fmt.Errorf("error creating or updating shadow: %v", err)
 		}
-		metadata.AddFinalizer(a.Route, SHADOW_FINALIZER)
+		log.Logger.Info("updating finalizers on route due to shadow creation")
+		metadata.AddFinalizer(a, SHADOW_FINALIZER)
 		//  - remove pending hosts label and annotation
-		metadata.RemoveLabel(a.Route, LABEL_HAS_PENDING_HOSTS)
-		metadata.RemoveAnnotation(a.Route, ANNOTATION_PENDING_CUSTOM_HOSTS)
+		metadata.RemoveLabel(a, LABEL_HAS_PENDING_HOSTS)
+		metadata.RemoveAnnotation(a, ANNOTATION_PENDING_CUSTOM_HOSTS)
 	}
 	return nil
 }

@@ -101,6 +101,16 @@ func WithGLBCAcceptablePermissionClaims(identityHash string) Option {
 				},
 				State: apisv1alpha1.ClaimAccepted,
 			},
+			{
+				PermissionClaim: apisv1alpha1.PermissionClaim{
+					GroupResource: apisv1alpha1.GroupResource{
+						Group:    "route.openshift.io",
+						Resource: "routes",
+					},
+					IdentityHash: identityHash,
+				},
+				State: apisv1alpha1.ClaimAccepted,
+			},
 		},
 	}
 }

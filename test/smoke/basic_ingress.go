@@ -115,7 +115,7 @@ func TestIngressBasic(t Test, ingressCount int, zoneID, glbcDomain string) {
 				HaveKey(traffic.LABEL_HAS_PENDING_HOSTS),
 			)),
 			// ensure the original spec has not changed
-			Satisfy(OriginalSpecUnchanged(t, &ingress.Spec)),
+			Satisfy(IngressOriginalSpecUnchanged(t, &ingress.Spec)),
 		))
 
 	}
@@ -159,13 +159,13 @@ func TestIngressBasic(t Test, ingressCount int, zoneID, glbcDomain string) {
 			WithTransform(Labels, And(
 				HaveKey(traffic.LABEL_HAS_PENDING_HOSTS),
 			)),
-			WithTransform(LoadBalancerIngresses, HaveLen(1)),
+			WithTransform(IngressLoadBalancerIngresses, HaveLen(1)),
 			//No custom hosts approved so only expect our default spec in the transform
-			Satisfy(TransformedSpec(t, GetDefaultSpec(generatedHost, tlsSecretName, name), true, true)),
+			Satisfy(IngressTransformedSpec(t, GetDefaultIngressSpec(generatedHost, tlsSecretName, name), true, true)),
 		))
 		record := GetDNSRecord(t, namespace, ingress.Name)
 		trafficIngress := traffic.NewIngress(&ingress)
-		if !LBHostEqualToGeneratedHost(trafficIngress, record) {
+		if !IngressLBHostEqualToGeneratedHost(trafficIngress, record) {
 			t.T().Fatalf("Generated host label on the ingress %s does not match load balancer host name %s", record.Annotations[traffic.ANNOTATION_HCG_HOST], trafficIngress.Status.LoadBalancer.Ingress[0].Hostname)
 		}
 	}

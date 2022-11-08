@@ -20,12 +20,13 @@ import (
 	"github.com/kcp-dev/logicalcluster/v2"
 
 	workload "github.com/kcp-dev/kcp/pkg/apis/workload/v1alpha1"
+	"github.com/rs/xid"
+
 	"github.com/kuadrant/kcp-glbc/pkg/_internal/metadata"
 	"github.com/kuadrant/kcp-glbc/pkg/_internal/slice"
 	v1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
 	"github.com/kuadrant/kcp-glbc/pkg/dns"
 	"github.com/kuadrant/kcp-glbc/pkg/dns/aws"
-	"github.com/rs/xid"
 )
 
 type DnsReconciler struct {
@@ -106,6 +107,7 @@ func (r *DnsReconciler) Reconcile(ctx context.Context, accessor Interface) (Reco
 			activeDNSTargetIPs[host] = append(activeDNSTargetIPs[host], host)
 			continue
 		}
+
 		// for a non ip value look up the DNS
 		addr, err := r.DNSLookup(ctx, host)
 		if err != nil {

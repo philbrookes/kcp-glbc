@@ -234,13 +234,13 @@ func (c *Controller) startWatches() {
 	c.KCPInformerFactory.Kuadrant().V1().DNSRecords().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		DeleteFunc: func(obj interface{}) {
 			//when a dns record is deleted we requeue the route (currently owner refs don't work in KCP)
-			dns := obj.(*kuadrantv1.DNSRecord)
-			if dns.Annotations == nil {
+			dnsRecord := obj.(*kuadrantv1.DNSRecord)
+			if dnsRecord.Annotations == nil {
 				return
 			}
 			// if we have a route key stored we can re queue the route
-			if trafficKey, ok := dns.Annotations[traffic.ANNOTATION_TRAFFIC_KEY]; ok {
-				c.Logger.V(3).Info("reqeueuing route dns record deleted", "cluster", logicalcluster.From(dns), "namespace", dns.Namespace, "name", dns.Name, "traffic key", trafficKey)
+			if trafficKey, ok := dnsRecord.Annotations[traffic.ANNOTATION_TRAFFIC_KEY]; ok {
+				c.Logger.V(3).Info("reqeueuing route dns record deleted", "cluster", logicalcluster.From(dnsRecord), "namespace", dnsRecord.Namespace, "name", dnsRecord.Name, "traffic key", trafficKey)
 				c.enqueueRouteByKey(trafficKey)
 			}
 		},
@@ -322,15 +322,21 @@ func (c *Controller) process(ctx context.Context, key string) error {
 
 	u := object.(*unstructured.Unstructured)
 	current := &routeapiv1.Route{}
+	currentStateReader := traffic.NewRoute(current)
 	_ = runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, current)
 	target := current.DeepCopy()
+	targetStateReadWriter := traffic.NewRoute(target)
 
-	err = c.reconcile(ctx, traffic.NewRoute(target))
+	err = c.reconcile(ctx, targetStateReadWriter)
 	if err != nil {
 		return err
 	}
 	if !equality.Semantic.DeepEqual(current, target) {
-		c.Logger.V(3).Info("attempting update of changed route ", "route key ", key)
+		// our ingress object is now in the correct state, before we commit lets apply any changes via a transform
+		if err := targetStateReadWriter.Transform(currentStateReader); err != nil {
+			return err
+		}
+		c.Logger.V(3).Info("attempting update of changed route ", "route key ", key, "TMC Enabled? ", targetStateReadWriter.TMCEnabed())
 		raw, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(target)
 		u = &unstructured.Unstructured{}
 		u.Object = raw

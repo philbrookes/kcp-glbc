@@ -12,6 +12,8 @@ import (
 	"github.com/miekg/dns"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+
+	log2 "github.com/kuadrant/kcp-glbc/pkg/_internal/log"
 )
 
 var (
@@ -98,6 +100,7 @@ func (r *ConfigMapHostResolver) TxtRecordExists(ctx context.Context, domain stri
 	}
 
 	for _, entry := range values {
+		log2.Logger.Info("checking for TXT record", "entry", entry, "value", value)
 		if entry.TXT == value {
 			return true, nil
 		}

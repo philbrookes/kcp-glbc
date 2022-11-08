@@ -92,6 +92,14 @@ func DNSRecordToIngressCertReady(t Test, namespace *corev1.Namespace, name strin
 	}
 }
 
+func DNSRecordToRouteCertReady(t Test, namespace *corev1.Namespace, name string) func(dnsrecord *kuadrantv1.DNSRecord) string {
+	return func(dnsrecord *kuadrantv1.DNSRecord) string {
+		route, err := GetRoute(t, namespace, dnsrecord.Name)
+		t.Expect(err).NotTo(gomega.HaveOccurred())
+		return route.Annotations[traffic.ANNOTATION_CERTIFICATE_STATE]
+	}
+}
+
 type Record struct {
 	TXT string `json:"TXT,omitempty"`
 	A   string `json:"A,omitempty"`

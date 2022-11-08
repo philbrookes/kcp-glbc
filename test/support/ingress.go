@@ -19,13 +19,15 @@ import (
 	"fmt"
 	"strings"
 
-	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
 	"github.com/onsi/gomega"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gstruct"
 	"github.com/onsi/gomega/types"
 
+	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
+
 	workload "github.com/kcp-dev/kcp/pkg/apis/workload/v1alpha1"
+
 	"github.com/kuadrant/kcp-glbc/pkg/dns"
 	"github.com/kuadrant/kcp-glbc/pkg/traffic"
 
@@ -49,8 +51,8 @@ func Ingress(t Test, namespace *corev1.Namespace, name string) func(g gomega.Gom
 	}
 }
 
-func IngressEndpoints(t Test, ingress *traffic.Ingress, res dns.HostResolver) []types.GomegaMatcher {
-	host := ingress.Annotations[traffic.ANNOTATION_HCG_HOST]
+func IngressEndpoints(t Test, ingress traffic.Interface, res dns.HostResolver) []types.GomegaMatcher {
+	host := ingress.GetAnnotations()[traffic.ANNOTATION_HCG_HOST]
 	targets, err := ingress.GetDNSTargets()
 	t.Expect(err).NotTo(gomega.HaveOccurred())
 	matchers := []types.GomegaMatcher{}
@@ -130,8 +132,8 @@ func ValidateTransformedIngress(expectedSpec networkingv1.IngressSpec, transform
 	return nil
 }
 
-// TransformedSpec will look at the transforms applied and compare them to the expected spec. cbrookes TODO(look at whether we could take the ingress apply configuration)
-func TransformedSpec(test Test, expectedSpec networkingv1.IngressSpec, expectRulesDiff, expectTLSDiff bool) func(ingress *traffic.Ingress) bool {
+// IngressTransformedSpec will look at the transforms applied and compare them to the expected spec. cbrookes TODO(look at whether we could take the ingress apply configuration)
+func IngressTransformedSpec(test Test, expectedSpec networkingv1.IngressSpec, expectRulesDiff, expectTLSDiff bool) func(ingress *traffic.Ingress) bool {
 	test.T().Log("Validating transformed spec for ingress")
 	return func(ingress *traffic.Ingress) bool {
 		if err := ValidateTransformedIngress(expectedSpec, ingress, expectRulesDiff, expectTLSDiff); err != nil {
@@ -157,7 +159,7 @@ func Ingresses(t Test, namespace *corev1.Namespace, labelSelector string) func(g
 	}
 }
 
-func LoadBalancerIngresses(ingress *traffic.Ingress) []corev1.LoadBalancerIngress {
+func IngressLoadBalancerIngresses(ingress *traffic.Ingress) []corev1.LoadBalancerIngress {
 	for a, v := range ingress.Annotations {
 		if strings.Contains(a, workload.InternalClusterStatusAnnotationPrefix) {
 			ingressStatus := networkingv1.IngressStatus{}
@@ -187,7 +189,7 @@ func HostsEqualsToGeneratedHost(ingress *traffic.Ingress) bool {
 	return equals
 }
 
-func LBHostEqualToGeneratedHost(ingress *traffic.Ingress, record *kuadrantv1.DNSRecord) bool {
+func IngressLBHostEqualToGeneratedHost(ingress *traffic.Ingress, record *kuadrantv1.DNSRecord) bool {
 	equals := true
 	for _, i := range ingress.Status.LoadBalancer.Ingress {
 		if i.Hostname != Annotations(record)[traffic.ANNOTATION_HCG_HOST] {
@@ -197,7 +199,7 @@ func LBHostEqualToGeneratedHost(ingress *traffic.Ingress, record *kuadrantv1.DNS
 	return equals
 }
 
-func OriginalSpecUnchanged(t Test, originalSpec *networkingv1.IngressSpec) func(ingress *traffic.Ingress) bool {
+func IngressOriginalSpecUnchanged(t Test, originalSpec *networkingv1.IngressSpec) func(ingress *traffic.Ingress) bool {
 	t.T().Log("validating original spec is unchanged")
 	return func(ingress *traffic.Ingress) bool {
 		if !equality.Semantic.DeepEqual(ingress.Spec.Rules, originalSpec.Rules) {
@@ -210,7 +212,7 @@ func OriginalSpecUnchanged(t Test, originalSpec *networkingv1.IngressSpec) func(
 	}
 }
 
-func GetDefaultSpec(host, tlsSecretName, serviceName string) networkingv1.IngressSpec {
+func GetDefaultIngressSpec(host, tlsSecretName, serviceName string) networkingv1.IngressSpec {
 	defaultPathType := networkingv1.PathTypePrefix
 	return networkingv1.IngressSpec{
 		TLS: []networkingv1.IngressTLS{

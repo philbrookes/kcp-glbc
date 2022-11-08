@@ -8,25 +8,28 @@ import (
 	"os"
 	"testing"
 
+	"github.com/onsi/gomega/types"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/kuadrant/kcp-glbc/pkg/_internal/env"
+	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
 	"github.com/kuadrant/kcp-glbc/pkg/dns"
 	"github.com/kuadrant/kcp-glbc/pkg/traffic"
 
-	. "github.com/onsi/gomega"
-	. "github.com/onsi/gomega/gstruct"
-	"github.com/onsi/gomega/types"
+	routeapiv1 "github.com/openshift/api/route/v1"
 
 	"github.com/kcp-dev/logicalcluster/v2"
+	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega/gstruct"
 	corev1 "k8s.io/api/core/v1"
 
-	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
 	. "github.com/kuadrant/kcp-glbc/test/support"
 )
 
-// TestIngress covers the main interactions with the ingress object. Assigning a GLBC host, custom domains transformations and TLS. It uses a dummy DNS provider
-func TestIngress(t *testing.T) {
+// TestRoute covers the main interactions with the route object. Assigning a GLBC host, custom domains transformations and TLS. It uses a dummy DNS provider
+func TestRoute(t *testing.T) {
 	test := With(t)
 	test.T().Parallel()
 
@@ -38,7 +41,7 @@ func TestIngress(t *testing.T) {
 	test.CreatePlacements(workspace)
 
 	// Create a namespace
-	namespace := test.NewTestNamespace(InWorkspace(workspace), WithLabel("kuadrant.dev/cluster-type", "glbc-ingresses"))
+	namespace := test.NewTestNamespace(InWorkspace(workspace), WithLabel("kuadrant.dev/cluster-type", "glbc-routes"))
 
 	name := "echo"
 
@@ -62,17 +65,48 @@ func TestIngress(t *testing.T) {
 			To(Succeed())
 	}()
 
-	// Create the Ingress with a custom domain set
-	customHost := "ingress-test.ingresses-gblb-custom.com"
-	ingConfig := IngressConfiguration(namespace.Name, name, name, customHost)
-	//store the original ingress before any reconciles happen
-	originalIngress, err := test.Client().Core().Cluster(logicalcluster.From(namespace)).NetworkingV1().Ingresses(namespace.Name).
-		Apply(test.Ctx(), ingConfig, ApplyOptions)
+	// Create the route with a custom domain set
+	customHost := "route-test.routes-gblb-custom.com"
+
+	//storing this to confirm it is restored once the custom domain is verified
+	originalTLSConfig := &routeapiv1.TLSConfig{
+		Termination:   routeapiv1.TLSTerminationEdge,
+		Certificate:   "",
+		Key:           "",
+		CACertificate: "",
+	}
+
+	route := &routeapiv1.Route{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Route",
+			APIVersion: RouteResource.GroupVersion().String(),
+		},
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: routeapiv1.RouteSpec{
+			Host:           customHost,
+			WildcardPolicy: routeapiv1.WildcardPolicyNone,
+			TLS:            originalTLSConfig,
+			To:             routeapiv1.RouteTargetReference{Name: name, Kind: "Service"},
+			Path:           "/",
+		},
+	}
+	uRoute, err := runtime.DefaultUnstructuredConverter.ToUnstructured(route)
 	test.Expect(err).NotTo(HaveOccurred())
 
+	originalUnstructuredRoute, err := test.Client().Dynamic().Cluster(logicalcluster.From(namespace)).Resource(RouteResource).Namespace(namespace.Name).Create(
+		test.Ctx(),
+		&unstructured.Unstructured{Object: uRoute},
+		metav1.CreateOptions{},
+	)
+	test.Expect(err).NotTo(HaveOccurred())
+
+	originalRoute, err := TrafficRouteFromUnstructured(originalUnstructuredRoute)
+	test.Expect(err).NotTo(HaveOccurred())
+	secretName := traffic.TLSSecretName(originalRoute)
+
 	defer func() {
-		test.Expect(test.Client().Core().Cluster(logicalcluster.From(namespace)).NetworkingV1().Ingresses(namespace.Name).
-			Delete(test.Ctx(), name, metav1.DeleteOptions{})).
+		test.Expect(test.Client().Dynamic().Cluster(logicalcluster.From(namespace)).Resource(RouteResource).Namespace(namespace.Name).
+			Delete(test.Ctx(), originalRoute.Name, metav1.DeleteOptions{})).
 			To(Succeed())
 	}()
 
@@ -83,29 +117,31 @@ func TestIngress(t *testing.T) {
 			Namespace: ConfigmapNamespace,
 		},
 	}
-
 	_, _ = test.Client().Core().Cluster(GLBCWorkspace).CoreV1().ConfigMaps(ConfigmapNamespace).
 		Create(test.Ctx(), zoneConfigMap, metav1.CreateOptions{})
 
-	ingress := GetIngress(test, namespace, name)
-	secretName := traffic.TLSSecretName(ingress)
+	// set empty TXT record in DNS
+	err = SetARecord(test, customHost, "192.168.0.1")
+	test.Expect(err).NotTo(HaveOccurred())
 
 	// Test our annotations are as expected and that we have not modified the original spec
-	test.Eventually(Ingress(test, namespace, name)).WithTimeout(TestTimeoutMedium).Should(And(
+	test.Eventually(Route(test, namespace, name)).WithTimeout(TestTimeoutMedium).Should(And(
 		WithTransform(Labels, And(
 			HaveKey(traffic.LABEL_HAS_PENDING_HOSTS),
 		)),
 		// ensure the original spec has not changed
-		Satisfy(IngressOriginalSpecUnchanged(test, &originalIngress.Spec)),
+		Satisfy(OriginalSpecUnchanged(test, originalRoute)),
 	))
-	test.T().Log("ingress in expected state")
-	// now our ingress is in the expected state assert TLS, DNS and Transforms correct
-	ingress = GetIngress(test, namespace, name)
-	record := GetDNSRecord(test, namespace, name)
-	hostname := record.Annotations[traffic.ANNOTATION_HCG_HOST]
+	test.T().Log("route in expected state")
+
+	dnsRecords := GetDNSRecord(test, namespace, name)
+	hostname := dnsRecords.Annotations[traffic.ANNOTATION_HCG_HOST]
 	resolver := dns.ConfigMapHostResolver{}
 	zoneID := os.Getenv("AWS_DNS_PUBLIC_ZONE_ID")
 	test.Expect(zoneID).NotTo(BeNil())
+
+	err = SetARecord(test, hostname, "192.168.0.1")
+	test.Expect(err).NotTo(HaveOccurred())
 
 	//TLS
 	issuer := env.GetEnvString("GLBC_TLS_PROVIDER", "glbc-ca")
@@ -185,25 +221,25 @@ func TestIngress(t *testing.T) {
 			},
 		})
 	}
-	// check our tls secret exists and is correct
+	//// check our tls secret exists and is correct
 	test.Eventually(Secret(test, namespace, secretName)).
 		WithTimeout(TestTimeoutShort).
-		Should(WithTransform(Labels, And(
-			HaveKeyWithValue("kuadrant.dev/hcg.managed", "true"),
-		)),
-			WithTransform(Certificate, PointTo(MatchFields(IgnoreExtras, fields))))
+		Should(
+			WithTransform(Labels, And(HaveKeyWithValue("kuadrant.dev/hcg.managed", "true"))),
+			WithTransform(Certificate, PointTo(MatchFields(IgnoreExtras, fields))),
+		)
 
 	test.T().Log("tls secret exists and is correctly configured")
 
-	// DNS Check a DNSRecord for the Ingress is created with the expected Spec
+	// DNS Check a DNSRecord for the Route is created with the expected Spec
 	test.Eventually(DNSRecord(test, namespace, name)).Should(And(
 		// ensure the ingress certificate is marked as ready when the DNSrecord is created
-		WithTransform(DNSRecordToIngressCertReady(test, namespace, name), Equal("ready")),
+		WithTransform(DNSRecordToRouteCertReady(test, namespace, name), Equal("ready")),
 		WithTransform(DNSRecordEndpoints, HaveLen(1)),
+		WithTransform(DNSRecordEndpoints, ContainElements(IngressEndpoints(test, originalRoute, &resolver))),
 		WithTransform(Annotations, And(
 			HaveKey(traffic.ANNOTATION_HCG_HOST),
 		)),
-		WithTransform(DNSRecordEndpoints, ContainElements(IngressEndpoints(test, ingress, &resolver))),
 		WithTransform(DNSRecordCondition(zoneID, kuadrantv1.DNSRecordFailedConditionType), MatchFieldsP(IgnoreExtras,
 			Fields{
 				"Status":  Equal("False"),
@@ -212,24 +248,28 @@ func TestIngress(t *testing.T) {
 			})),
 	))
 	test.T().Log("DNS is as expected")
-	glbcHost := record.Annotations[traffic.ANNOTATION_HCG_HOST]
+
+	glbcHost := dnsRecords.Annotations[traffic.ANNOTATION_HCG_HOST]
+	tlsSecret := Secret(test, namespace, secretName)(test)
+	tlsConfig := &routeapiv1.TLSConfig{
+		Termination:   routeapiv1.TLSTerminationEdge,
+		Certificate:   string(tlsSecret.Data[corev1.TLSCertKey]),
+		Key:           string(tlsSecret.Data[corev1.TLSPrivateKeyKey]),
+		CACertificate: string(tlsSecret.Data[corev1.ServiceAccountRootCAKey]),
+	}
 
 	// Test that our transforms have the expected spec and that our status is set to the generated host
-	test.Eventually(Ingress(test, namespace, name)).WithTimeout(TestTimeoutShort).Should(And(
-		Satisfy(IngressOriginalSpecUnchanged(test, &originalIngress.Spec)),
-		Satisfy(IngressTransformedSpec(test, GetDefaultIngressSpec(glbcHost, secretName, name), true, true)),
+	test.Eventually(Route(test, namespace, name)).WithTimeout(TestTimeoutShort).Should(And(
+		Satisfy(OriginalSpecUnchanged(test, originalRoute)),
+		Satisfy(RouteTransformedSpec(test, GetDefaultRouteSpec(glbcHost, name, tlsConfig))),
 		//check that we have a LB set to our generated host
-		WithTransform(IngressLoadBalancerIngresses, HaveLen(1)),
+		WithTransform(RouteLoadBalancerIngresses, HaveLen(1)),
+		Satisfy(RouteLBHostEqualToGeneratedHost),
 	))
-
-	ingress = GetIngress(test, namespace, name)
-	if !IngressLBHostEqualToGeneratedHost(ingress, record) {
-		test.T().Fatalf("Generated host label on the ingress %s does not match load balancer host name", record.Annotations[traffic.ANNOTATION_HCG_HOST])
-	}
 	test.T().Log("transforms are in place and ingress is ready (dns load balancer is set in the status)")
 
 	// Create a domain verification for the custom domain
-	_, _ = test.Client().Kuadrant().Cluster(logicalcluster.From(ingress)).KuadrantV1().DomainVerifications().Create(test.Ctx(), &kuadrantv1.DomainVerification{
+	_, err = test.Client().Kuadrant().Cluster(logicalcluster.From(originalRoute)).KuadrantV1().DomainVerifications().Create(test.Ctx(), &kuadrantv1.DomainVerification{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: customHost,
 		},
@@ -237,6 +277,7 @@ func TestIngress(t *testing.T) {
 			Domain: customHost,
 		},
 	}, metav1.CreateOptions{})
+	test.Expect(err).NotTo(HaveOccurred())
 	defer func() {
 		test.Expect(test.Client().Kuadrant().Cluster(logicalcluster.From(namespace)).KuadrantV1().DomainVerifications().
 			Delete(test.Ctx(), customHost, metav1.DeleteOptions{})).
@@ -244,21 +285,21 @@ func TestIngress(t *testing.T) {
 	}()
 
 	// see domain verification is not verified
-	test.Eventually(DomainVerification(test, logicalcluster.From(ingress), customHost)).WithTimeout(TestTimeoutMedium).Should(And(
+	test.Eventually(DomainVerification(test, logicalcluster.From(originalRoute), customHost)).WithTimeout(TestTimeoutMedium).Should(And(
 		WithTransform(DomainVerificationFor, Equal(customHost)),
 		WithTransform(DomainVerified, Equal(false)),
 		WithTransform(DomainToken, Not(Equal(""))),
 	))
 
-	// see custom host is not active in ingress
-	test.Eventually(Ingress(test, namespace, name)).WithTimeout(TestTimeoutMedium).Should(And(
-		Satisfy(IngressOriginalSpecUnchanged(test, &originalIngress.Spec)),
-		Satisfy(IngressTransformedSpec(test, GetDefaultIngressSpec(glbcHost, secretName, name), true, true)),
+	// see custom host is not active in route
+	test.Eventually(Route(test, namespace, name)).WithTimeout(TestTimeoutMedium).Should(And(
+		Satisfy(OriginalSpecUnchanged(test, originalRoute)),
+		Satisfy(RouteTransformedSpec(test, GetDefaultRouteSpec(glbcHost, name, tlsConfig))),
 	))
-	test.T().Log("domain not verified custom host not propigated to cluster")
+	test.T().Log("domain not verified custom host not propagated to cluster")
 
 	// get domainVerification in order to read required token
-	dv, err := test.Client().Kuadrant().Cluster(logicalcluster.From(ingress)).KuadrantV1().DomainVerifications().Get(test.Ctx(), customHost, metav1.GetOptions{})
+	dv, err := test.Client().Kuadrant().Cluster(logicalcluster.From(originalRoute)).KuadrantV1().DomainVerifications().Get(test.Ctx(), customHost, metav1.GetOptions{})
 	test.Expect(err).NotTo(HaveOccurred())
 
 	// set TXT record in DNS
@@ -266,23 +307,24 @@ func TestIngress(t *testing.T) {
 	test.Expect(err).NotTo(HaveOccurred())
 
 	// see domain verification is verified
-	test.Eventually(DomainVerification(test, logicalcluster.From(ingress), customHost)).WithTimeout(TestTimeoutShort).Should(And(
+	test.Eventually(DomainVerification(test, logicalcluster.From(originalRoute), customHost)).WithTimeout(TestTimeoutShort).Should(And(
 		WithTransform(DomainVerificationFor, Equal(customHost)),
 		WithTransform(DomainVerified, Equal(true)),
 		WithTransform(DomainToken, Equal(dv.Status.Token)),
 	))
 	test.T().Log("domain is now verified")
-	withCustomDomain := GetDefaultIngressSpec(glbcHost, secretName, name)
-	//bit nasty but do it this way as this is how it is appended in the reconcile and the order matters for matching
-	originalIngress.Spec.Rules = append(originalIngress.Spec.Rules, withCustomDomain.Rules...)
-	withCustomDomain.Rules = originalIngress.Spec.Rules
-	originalIngress.Spec.TLS = append(originalIngress.Spec.TLS, withCustomDomain.TLS...)
-	withCustomDomain.TLS = originalIngress.Spec.TLS
+	withCustomDomain := GetDefaultRouteSpec(glbcHost, name, originalTLSConfig)
+	withCustomDomain.Host = customHost
 
 	// now we have built up our expected transformed spec check it is the same as the transformations applied to the annotations
-	test.Eventually(Ingress(test, namespace, name)).WithTimeout(TestTimeoutShort).Should(And(
-		Satisfy(IngressTransformedSpec(test, withCustomDomain, true, true)),
+	test.Eventually(Route(test, namespace, name)).WithTimeout(TestTimeoutShort).Should(And(
+		Satisfy(RouteTransformedSpec(test, withCustomDomain)),
 	))
 
-	test.T().Log("ingress is transformed correctly and in final state")
+	//verify shadow is created
+	test.Eventually(Route(test, namespace, name+"-shadow")).WithTimeout(TestTimeoutShort).Should(And(
+		Satisfy(RouteTransformedSpec(test, GetDefaultRouteSpec(glbcHost, name+"-shadow", tlsConfig))),
+	))
+
+	test.T().Log("route is transformed correctly and in final state")
 }

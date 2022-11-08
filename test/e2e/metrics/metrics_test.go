@@ -131,13 +131,24 @@ func TestMetrics(t *testing.T) {
 	// Wait until the Ingress is reconciled with the load balancer set. This is how we know the ingress is considered ready
 	test.Eventually(Ingress(test, namespace, name)).WithTimeout(TestTimeoutMedium).Should(And(
 		// Load balancer status
-		WithTransform(LoadBalancerIngresses, HaveLen(1)),
+		WithTransform(IngressLoadBalancerIngresses, HaveLen(1)),
 	))
 
-	ingerss := GetIngress(test, namespace, name)
+	test.T().Logf("ingress %s created and ready", name)
+
+	test.Eventually(DNSRecord(test, namespace, name)).Should(And(
+		// ensure the ingress certificate is marked as ready when the DNSrecord is created
+		WithTransform(DNSRecordToIngressCertReady(test, namespace, name), Equal("ready")),
+		WithTransform(DNSRecordEndpoints, HaveLen(1)),
+		WithTransform(Annotations, And(
+			HaveKey(traffic.ANNOTATION_HCG_HOST),
+		)),
+	))
+
+	ingress := GetIngress(test, namespace, name)
 	record := GetDNSRecord(test, namespace, name)
-	if !LBHostEqualToGeneratedHost(ingerss, record) {
-		test.T().Fatalf("Generated host label on the ingress %s does not match load balancer host name %s", record.Annotations[traffic.ANNOTATION_HCG_HOST], ingerss.Status.LoadBalancer.Ingress[0].Hostname)
+	if !IngressLBHostEqualToGeneratedHost(ingress, record) {
+		test.T().Fatalf("Generated host label on the ingress %s does not match load balancer host name %s", record.Annotations[traffic.ANNOTATION_HCG_HOST], ingress.Status.LoadBalancer.Ingress[0].Hostname)
 	}
 
 	// Check the metrics
