@@ -1,0 +1,10 @@
+---
+apiVersion: apis.kcp.dev/v1alpha1
+kind: APIBinding
+metadata:
+  name: cert-manager
+spec:
+  reference:
+    workspace:
+      path: root:kuadrant
+      exportName: cert-manager-stable

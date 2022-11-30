@@ -26,10 +26,10 @@ func (c *Controller) reconcile(ctx context.Context, route *traffic.Route) error 
 	reconcilers := []traffic.Reconciler{
 		// DnsReconciler is first as it will set generatedHost field on the traffic object based on the DNSRecord it creates for each route
 		&traffic.DnsReconciler{
-			DeleteDNS:        c.deleteDNS,
-			GetDNS:           c.getDNS,
-			CreateDNS:        c.createDNS,
-			UpdateDNS:        c.updateDNS,
+			DeleteDNS:        c.DeleteDNS,
+			GetDNS:           c.GetDNS,
+			CreateDNS:        c.CreateDNS,
+			UpdateDNS:        c.UpdateDNS,
 			WatchHost:        c.hostsWatcher.StartWatching,
 			ForgetHost:       c.hostsWatcher.StopWatching,
 			ListHostWatchers: c.hostsWatcher.ListHostRecordWatchers,
@@ -39,9 +39,9 @@ func (c *Controller) reconcile(ctx context.Context, route *traffic.Route) error 
 		},
 		&traffic.HostReconciler{
 			Log:                    c.Logger,
-			GetDomainVerifications: c.getDomainVerifications,
-			CreateOrUpdateTraffic:  c.createOrUpdateRoute,
-			DeleteTraffic:          c.deleteRoute,
+			GetDomainVerifications: c.GetDomainVerifications,
+			CreateOrUpdateTraffic:  c.CreateOrUpdateRoute,
+			DeleteTraffic:          c.DeleteRoute,
 		},
 		&traffic.CertificateReconciler{
 			Log:                  c.Logger,
@@ -50,9 +50,9 @@ func (c *Controller) reconcile(ctx context.Context, route *traffic.Route) error 
 			GetCertificateSecret: c.certProvider.GetCertificateSecret,
 			UpdateCertificate:    c.certProvider.Update,
 			GetCertificateStatus: c.certProvider.GetCertificateStatus,
-			CopySecret:           c.copySecret,
-			DeleteSecret:         c.deleteTLSSecret,
-			GetSecret:            c.getSecret,
+			CopySecret:           c.CopySecret,
+			DeleteSecret:         c.DeleteTLSSecret,
+			GetSecret:            c.GetSecret,
 		},
 	}
 	var errs []error

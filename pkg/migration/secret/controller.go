@@ -8,7 +8,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
@@ -19,6 +18,7 @@ import (
 	"github.com/kuadrant/kcp-glbc/pkg/migration/workload"
 	"github.com/kuadrant/kcp-glbc/pkg/reconciler"
 	basereconciler "github.com/kuadrant/kcp-glbc/pkg/reconciler"
+	"github.com/kuadrant/kcp-glbc/pkg/superClient"
 )
 
 const defaultControllerName = "kcp-glbc-secret"
@@ -29,7 +29,7 @@ func NewController(config *ControllerConfig) (*Controller, error) {
 	queue := workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), controllerName)
 	c := &Controller{
 		Controller:            basereconciler.NewController(controllerName, queue),
-		coreClient:            config.SecretsClient,
+		superClient:           config.SuperClient,
 		sharedInformerFactory: config.SharedInformerFactory,
 	}
 	c.Process = c.process
@@ -60,14 +60,14 @@ func NewController(config *ControllerConfig) (*Controller, error) {
 
 type ControllerConfig struct {
 	*reconciler.ControllerConfig
-	SecretsClient         kubernetes.ClusterInterface
+	SuperClient           superClient.Interface
 	SharedInformerFactory informers.SharedInformerFactory
 }
 
 type Controller struct {
 	*reconciler.Controller
 	sharedInformerFactory informers.SharedInformerFactory
-	coreClient            kubernetes.ClusterInterface
+	superClient           superClient.Interface
 	indexer               cache.Indexer
 	secretLister          corev1listers.SecretLister
 	migrationHandler      func(obj metav1.Object, queue workqueue.RateLimitingInterface, logger logr.Logger)
@@ -92,7 +92,7 @@ func (c *Controller) process(ctx context.Context, key string) error {
 	}
 
 	if !equality.Semantic.DeepEqual(target, current) {
-		_, err := c.coreClient.Cluster(logicalcluster.From(target)).CoreV1().Secrets(target.Namespace).Update(ctx, target, metav1.UpdateOptions{})
+		_, err := c.superClient.WorkspaceClient(logicalcluster.From(target)).CoreV1().Secrets(target.Namespace).Update(ctx, target, metav1.UpdateOptions{})
 		return err
 	}
 

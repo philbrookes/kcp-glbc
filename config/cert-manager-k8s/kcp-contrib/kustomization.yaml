@@ -1,0 +1,5 @@
+resources:
+  - crds/pods.yaml
+  - certificates-apiresourceschema.yaml
+  - cert-manager-apiexport.yaml
+  - cert-manager-apibinding.yaml

@@ -26,10 +26,10 @@ func (c *Controller) reconcile(ctx context.Context, ingress traffic.Interface) e
 	reconcilers := []traffic.Reconciler{
 		// DnsReconciler is first as it will set generatedHost field on the traffic object based on the DNSRecord it creates for each ingress
 		&traffic.DnsReconciler{
-			DeleteDNS:        c.deleteDNS,
-			GetDNS:           c.getDNS,
-			CreateDNS:        c.createDNS,
-			UpdateDNS:        c.updateDNS,
+			DeleteDNS:        c.DeleteDNS,
+			GetDNS:           c.GetDNS,
+			CreateDNS:        c.CreateDNS,
+			UpdateDNS:        c.UpdateDNS,
 			WatchHost:        c.hostsWatcher.StartWatching,
 			ForgetHost:       c.hostsWatcher.StopWatching,
 			ListHostWatchers: c.hostsWatcher.ListHostRecordWatchers,
@@ -39,7 +39,7 @@ func (c *Controller) reconcile(ctx context.Context, ingress traffic.Interface) e
 		},
 		&traffic.HostReconciler{
 			Log:                    c.Logger,
-			GetDomainVerifications: c.getDomainVerifications,
+			GetDomainVerifications: c.GetDomainVerifications,
 			CreateOrUpdateTraffic:  c.createOrUpdateIngress,
 			DeleteTraffic:          c.deleteRoute,
 		},
@@ -49,9 +49,9 @@ func (c *Controller) reconcile(ctx context.Context, ingress traffic.Interface) e
 			GetCertificateSecret: c.certProvider.GetCertificateSecret,
 			UpdateCertificate:    c.certProvider.Update,
 			GetCertificateStatus: c.certProvider.GetCertificateStatus,
-			CopySecret:           c.copySecret,
-			GetSecret:            c.getSecret,
-			DeleteSecret:         c.deleteTLSSecret,
+			CopySecret:           c.CopySecret,
+			GetSecret:            c.GetSecret,
+			DeleteSecret:         c.DeleteTLSSecret,
 			Log:                  c.Logger,
 		},
 	}

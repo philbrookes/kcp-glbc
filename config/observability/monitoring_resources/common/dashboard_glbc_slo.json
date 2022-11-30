@@ -13,15 +13,15 @@
     ]
   },
   "editable": true,
-  "gnetId": null,
+  "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 3,
-  "iteration": 1667475249581,
+  "id": 2,
+  "iteration": 1658929996232,
   "links": [],
+  "liveNow": false,
   "panels": [
     {
       "collapsed": false,
-      "datasource": null,
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -34,14 +34,7 @@
       "type": "row"
     },
     {
-      "datasource": null,
       "description": "",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {}
-        },
-        "overrides": []
-      },
       "gridPos": {
         "h": 5,
         "w": 23,
@@ -53,7 +46,7 @@
         "content": "# Service Level Indicator (SLI)\nThe proportion of sufficiently fast Ingress admissions, as measured from ingress creation through to admission time in the gateway. \"Sufficiently fast\" is defined as < 2 minutes , or < 5 minutes.\n\n# Service Level Objective (SLO)\n50% of admissions < 2 minutes, and 60% of admissions < 5 minutes",
         "mode": "markdown"
       },
-      "pluginVersion": "7.3.10",
+      "pluginVersion": "8.3.3",
       "type": "text"
     },
     {
@@ -64,7 +57,6 @@
           "color": {
             "mode": "thresholds"
           },
-          "custom": {},
           "mappings": [],
           "max": 1,
           "min": 0,
@@ -106,7 +98,7 @@
         },
         "textMode": "auto"
       },
-      "pluginVersion": "7.3.10",
+      "pluginVersion": "8.3.3",
       "targets": [
         {
           "datasource": "$datasource",
@@ -122,11 +114,10 @@
       "type": "stat"
     },
     {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "$datasource",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
       "description": "Shows the SLO performance % over the selected time range. The selected time range determines both how much data to graph and how much lookback data to include for each graph point. For example, selecting a 1 week range, actually uses 2 weeks of data to draw the graph. The first point will aggregate data from 1 week previous, and so on until the latest point. These are a good inidcator of SLO performance over a sliding window and should not be used for fixed window reporting i.e. a 28 day fixed dates SLO.",
       "fieldConfig": {
         "defaults": {
@@ -181,40 +172,23 @@
         },
         "overrides": []
       },
-      "fill": 0,
-      "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 17,
         "x": 6,
         "y": 6
       },
-      "hiddenSeries": false,
       "id": 4,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 2,
-      "nullPointMode": "null",
       "options": {
-        "alertThreshold": true
+        "legend": {
+          "calcs": [],
+          "displayMode": "hidden",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
       },
-      "percentage": false,
-      "pluginVersion": "7.3.10",
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
       "targets": [
         {
           "datasource": "$datasource",
@@ -237,56 +211,20 @@
           "refId": "B"
         }
       ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
       "title": "SLO - 50% of admissions < 2 minutes -  over time",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "percentunit",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
+      "type": "timeseries"
     },
     {
-      "datasource": "$datasource",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
       "description": "Shows the SLO performance % for the selected time range. For example, selecting a 1 week range will aggregate that 1 week of data. This stat is useful for fixed range SLO reporting, while the graph is not (it's a sliding window view). For example, if you want a 28 day SLO % for a specific 28 day period, choosing that date range should give you what you need.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
-          "custom": {},
           "mappings": [],
           "max": 1,
           "min": 0,
@@ -328,7 +266,7 @@
         },
         "textMode": "auto"
       },
-      "pluginVersion": "7.3.10",
+      "pluginVersion": "8.3.3",
       "targets": [
         {
           "datasource": "$datasource",
@@ -344,11 +282,10 @@
       "type": "stat"
     },
     {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "$datasource",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
       "description": "Shows the SLO performance % over the selected time range. The selected time range determines both how much data to graph and how much lookback data to include for each graph point. For example, selecting a 1 week range, actually uses 2 weeks of data to draw the graph. The first point will aggregate data from 1 week previous, and so on until the latest point. These are a good inidcator of SLO performance over a sliding window and should not be used for fixed window reporting i.e. a 28 day fixed dates SLO.",
       "fieldConfig": {
         "defaults": {
@@ -403,40 +340,23 @@
         },
         "overrides": []
       },
-      "fill": 0,
-      "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 17,
         "x": 6,
         "y": 14
       },
-      "hiddenSeries": false,
       "id": 10,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 2,
-      "nullPointMode": "null",
       "options": {
-        "alertThreshold": true
+        "legend": {
+          "calcs": [],
+          "displayMode": "hidden",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
       },
-      "percentage": false,
-      "pluginVersion": "7.3.10",
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
       "targets": [
         {
           "datasource": "$datasource",
@@ -459,50 +379,12 @@
           "refId": "B"
         }
       ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
       "title": "SLO - 60% of admissions < 5 minutes -  over time",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "percentunit",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
+      "type": "timeseries"
     }
   ],
   "refresh": false,
-  "schemaVersion": 26,
+  "schemaVersion": 34,
   "style": "dark",
   "tags": [],
   "templating": {
@@ -510,10 +392,9 @@
       {
         "current": {
           "selected": false,
-          "text": "Prometheus",
-          "value": "Prometheus"
+          "text": "prometheus",
+          "value": "prometheus"
         },
-        "error": null,
         "hide": 0,
         "includeAll": false,
         "label": "Data Source",
@@ -527,22 +408,23 @@
         "type": "datasource"
       },
       {
-        "allValue": null,
         "current": {
           "selected": false,
-          "text": "kcp-711wdqeouju1",
-          "value": "kcp-711wdqeouju1"
+          "text": "kcp89b5fd4ba9405ee7b18d0da859ce7420d36926bac4a97e01af5c244a",
+          "value": "kcp89b5fd4ba9405ee7b18d0da859ce7420d36926bac4a97e01af5c244a"
         },
         "datasource": "$datasource",
         "definition": "label_values(glbc_controller_reconcile_total, namespace)",
-        "error": null,
         "hide": 0,
         "includeAll": false,
         "label": "Namespace (filtered to glbc namespaces)",
         "multi": false,
         "name": "namespace",
         "options": [],
-        "query": "label_values(glbc_controller_reconcile_total, namespace)",
+        "query": {
+          "query": "label_values(glbc_controller_reconcile_total, namespace)",
+          "refId": "StandardVariableQuery"
+        },
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,
@@ -566,5 +448,6 @@
   "timezone": "browser",
   "title": "GLBC / SLO",
   "uid": "RK0iFmzVz",
-  "version": 1
+  "version": 1,
+  "weekStart": ""
 }

@@ -5,21 +5,23 @@ import (
 	"encoding/json"
 	"strings"
 
+	tenancyv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
 	networkingv1lister "k8s.io/client-go/listers/networking/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
 	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
 	"github.com/kuadrant/kcp-glbc/pkg/dns"
+	"github.com/kuadrant/kcp-glbc/pkg/superClient"
 	"github.com/kuadrant/kcp-glbc/pkg/traffic"
 
 	"github.com/kcp-dev/logicalcluster/v2"
@@ -28,7 +30,6 @@ import (
 	certmaninformer "github.com/jetstack/cert-manager/pkg/client/informers/externalversions"
 	certmanlister "github.com/jetstack/cert-manager/pkg/client/listers/certmanager/v1"
 
-	kuadrantclientv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
 	kuadrantInformer "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/informers/externalversions"
 	basereconciler "github.com/kuadrant/kcp-glbc/pkg/reconciler"
 	"github.com/kuadrant/kcp-glbc/pkg/tls"
@@ -46,7 +47,7 @@ func NewController(config *ControllerConfig) *Controller {
 	hostResolver := config.HostResolver
 	switch impl := hostResolver.(type) {
 	case *dns.ConfigMapHostResolver:
-		impl.Client = config.KubeClient
+		impl.Client = config.SuperClient.WorkspaceClient(tenancyv1alpha1.RootCluster)
 	}
 
 	hostResolver = dns.NewSafeHostResolver(hostResolver)
@@ -54,12 +55,10 @@ func NewController(config *ControllerConfig) *Controller {
 	base := basereconciler.NewController(controllerName, queue)
 	c := &Controller{
 		Controller:              base,
-		kubeClient:              config.KubeClient,
-		KCPKubeClient:           config.KCPKubeClient,
+		superClient:             config.SuperClient,
 		certProvider:            config.CertProvider,
 		sharedInformerFactory:   config.KCPSharedInformerFactory,
 		glbcInformerFactory:     config.GlbcInformerFactory,
-		kuadrantClient:          config.DnsRecordClient,
 		domain:                  config.Domain,
 		hostResolver:            hostResolver,
 		hostsWatcher:            dns.NewHostsWatcher(&base.Logger, hostResolver, dns.DefaultInterval),
@@ -240,9 +239,7 @@ func NewController(config *ControllerConfig) *Controller {
 
 type ControllerConfig struct {
 	*basereconciler.ControllerConfig
-	KCPKubeClient            kubernetes.ClusterInterface
-	KubeClient               kubernetes.Interface
-	DnsRecordClient          kuadrantclientv1.ClusterInterface
+	SuperClient              superClient.Interface
 	KCPSharedInformerFactory informers.SharedInformerFactory
 	CertificateInformer      certmaninformer.SharedInformerFactory
 	GlbcInformerFactory      informers.SharedInformerFactory
@@ -255,10 +252,8 @@ type ControllerConfig struct {
 
 type Controller struct {
 	*basereconciler.Controller
-	kubeClient              kubernetes.Interface
-	KCPKubeClient           kubernetes.ClusterInterface
+	superClient             superClient.Interface
 	sharedInformerFactory   informers.SharedInformerFactory
-	kuadrantClient          kuadrantclientv1.ClusterInterface
 	indexer                 cache.Indexer
 	ingressLister           networkingv1lister.IngressLister
 	certificateLister       certmanlister.CertificateLister
@@ -314,7 +309,7 @@ func (c *Controller) process(ctx context.Context, key string) error {
 			return err
 		}
 		c.Logger.V(3).Info("attempting update of changed ingress ", "ingress key ", key)
-		_, err = c.KCPKubeClient.Cluster(logicalcluster.From(targetState)).NetworkingV1().Ingresses(targetState.Namespace).Update(ctx, targetState, metav1.UpdateOptions{})
+		_, err = c.superClient.WorkspaceClient(logicalcluster.From(targetState)).NetworkingV1().Ingresses(targetState.Namespace).Update(ctx, targetState, metav1.UpdateOptions{})
 		if err != nil {
 			return err
 		}
@@ -322,7 +317,7 @@ func (c *Controller) process(ctx context.Context, key string) error {
 	if targetStateReadWriter.TMCEnabed() {
 		if !equality.Semantic.DeepEqual(currentState.Status, targetState.Status) {
 			c.Logger.V(3).Info("attempting update of status for ingress ", "ingress key ", key)
-			_, err = c.KCPKubeClient.Cluster(logicalcluster.From(targetState)).NetworkingV1().Ingresses(targetState.Namespace).UpdateStatus(ctx, targetState, metav1.UpdateOptions{})
+			_, err = c.superClient.WorkspaceClient(logicalcluster.From(targetState)).NetworkingV1().Ingresses(targetState.Namespace).UpdateStatus(ctx, targetState, metav1.UpdateOptions{})
 			if err != nil {
 				return err
 			}
@@ -391,63 +386,6 @@ func (c *Controller) ingressesFromDomainVerification(obj interface{}) ([]*networ
 	return ingressesToEnqueue, nil
 }
 
-func (c *Controller) getDomainVerifications(ctx context.Context, accessor traffic.Interface) (*kuadrantv1.DomainVerificationList, error) {
-	return c.kuadrantClient.Cluster(accessor.GetLogicalCluster()).KuadrantV1().DomainVerifications().List(ctx, metav1.ListOptions{})
-}
-
-func (c *Controller) deleteTLSSecret(ctx context.Context, workspace logicalcluster.Name, namespace, name string) error {
-	if err := c.KCPKubeClient.Cluster(workspace).CoreV1().Secrets(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
-		return err
-	}
-	return nil
-}
-
-func (c *Controller) getSecret(ctx context.Context, name, namespace string, cluster logicalcluster.Name) (*corev1.Secret, error) {
-	return c.KCPKubeClient.Cluster(cluster).CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
-}
-
-func (c *Controller) copySecret(ctx context.Context, workspace logicalcluster.Name, namespace string, secret *corev1.Secret) error {
-	secret.ResourceVersion = ""
-	secretClient := c.KCPKubeClient.Cluster(workspace).CoreV1().Secrets(namespace)
-	_, err := secretClient.Create(ctx, secret, metav1.CreateOptions{})
-	if err != nil && k8serrors.IsAlreadyExists(err) {
-		s, err := secretClient.Get(ctx, secret.Name, metav1.GetOptions{})
-		if err != nil {
-			return err
-		}
-		s.Data = secret.Data
-		if _, err := secretClient.Update(ctx, s, metav1.UpdateOptions{}); err != nil {
-			return err
-		}
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	return nil
-
-}
-
-func (c *Controller) updateDNS(ctx context.Context, dns *kuadrantv1.DNSRecord) (*kuadrantv1.DNSRecord, error) {
-	updated, err := c.kuadrantClient.Cluster(logicalcluster.From(dns)).KuadrantV1().DNSRecords(dns.Namespace).Update(ctx, dns, metav1.UpdateOptions{})
-	if err != nil {
-		return nil, err
-	}
-	return updated, nil
-}
-
-func (c *Controller) deleteDNS(ctx context.Context, accessor traffic.Interface) error {
-	return c.kuadrantClient.Cluster(logicalcluster.From(accessor)).KuadrantV1().DNSRecords(accessor.GetNamespace()).Delete(ctx, accessor.GetName(), metav1.DeleteOptions{})
-}
-
-func (c *Controller) getDNS(ctx context.Context, accessor traffic.Interface) (*kuadrantv1.DNSRecord, error) {
-	return c.kuadrantClient.Cluster(logicalcluster.From(accessor)).KuadrantV1().DNSRecords(accessor.GetNamespace()).Get(ctx, accessor.GetName(), metav1.GetOptions{})
-}
-
-func (c *Controller) createDNS(ctx context.Context, dnsRecord *kuadrantv1.DNSRecord) (*kuadrantv1.DNSRecord, error) {
-	return c.kuadrantClient.Cluster(logicalcluster.From(dnsRecord)).KuadrantV1().DNSRecords(dnsRecord.Namespace).Create(ctx, dnsRecord, metav1.CreateOptions{})
-}
-
 func HostMatches(host, domain string) bool {
 	if host == domain {
 		return true
@@ -466,4 +404,67 @@ func (c *Controller) createOrUpdateIngress(_ context.Context, _ traffic.Interfac
 
 func (c *Controller) deleteRoute(_ context.Context, _ traffic.Interface) error {
 	return nil
+}
+
+func (c *Controller) GetDomainVerifications(ctx context.Context, accessor traffic.Interface) (*kuadrantv1.DomainVerificationList, error) {
+	return c.superClient.WorkspaceKuadrantClient(logicalcluster.From(accessor)).KuadrantV1().DomainVerifications().List(ctx, metav1.ListOptions{})
+}
+
+func (c *Controller) GetSecret(ctx context.Context, name, namespace string, cluster logicalcluster.Name) (*corev1.Secret, error) {
+	return c.superClient.WorkspaceClient(cluster).CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+}
+
+func (c *Controller) DeleteTLSSecret(ctx context.Context, workspace logicalcluster.Name, namespace, name string) error {
+	if err := c.superClient.WorkspaceClient(workspace).CoreV1().Secrets(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+func (c *Controller) CopySecret(ctx context.Context, workspace logicalcluster.Name, namespace string, secret *corev1.Secret) error {
+	secret.ResourceVersion = ""
+	secretClient := c.superClient.WorkspaceClient(workspace).CoreV1().Secrets(namespace)
+	_, err := secretClient.Create(ctx, secret, metav1.CreateOptions{})
+	if err != nil && k8serrors.IsAlreadyExists(err) {
+		s, err := secretClient.Get(ctx, secret.Name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		s.Data = secret.Data
+		if _, err := secretClient.Update(ctx, s, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+func (c *Controller) UpdateDNS(ctx context.Context, dns *kuadrantv1.DNSRecord) (*kuadrantv1.DNSRecord, error) {
+	updated, err := c.superClient.WorkspaceKuadrantClient(logicalcluster.From(dns)).KuadrantV1().DNSRecords(dns.Namespace).Update(ctx, dns, metav1.UpdateOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func (c *Controller) DeleteDNS(ctx context.Context, accessor traffic.Interface) error {
+	return c.superClient.WorkspaceKuadrantClient(logicalcluster.From(accessor)).KuadrantV1().DNSRecords(accessor.GetNamespace()).Delete(ctx, accessor.GetName(), metav1.DeleteOptions{})
+}
+
+func (c *Controller) GetDNS(ctx context.Context, accessor traffic.Interface) (*kuadrantv1.DNSRecord, error) {
+	return c.superClient.WorkspaceKuadrantClient(logicalcluster.From(accessor)).KuadrantV1().DNSRecords(accessor.GetNamespace()).Get(ctx, accessor.GetName(), metav1.GetOptions{})
+}
+func (c *Controller) CreateDNS(ctx context.Context, dnsRecord *kuadrantv1.DNSRecord) (*kuadrantv1.DNSRecord, error) {
+	return c.superClient.WorkspaceKuadrantClient(logicalcluster.From(dnsRecord)).KuadrantV1().DNSRecords(dnsRecord.Namespace).Create(ctx, dnsRecord, metav1.CreateOptions{})
+}
+func (c *Controller) DeleteRoute(ctx context.Context, o traffic.Interface) error {
+	routeResource := schema.GroupVersionResource{Group: "route.openshift.io", Version: "v1", Resource: "routes"}
+	r := o.(*traffic.Route)
+	err := c.superClient.WorkspaceDynamicClient(r.GetLogicalCluster()).Resource(routeResource).Namespace(r.GetNamespace()).Delete(ctx, r.GetName(), metav1.DeleteOptions{})
+	if k8serrors.IsNotFound(err) {
+		return nil
+	}
+	return err
 }

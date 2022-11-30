@@ -7,7 +7,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
 	appsv1listers "k8s.io/client-go/listers/apps/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
@@ -15,8 +14,10 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/kcp-dev/logicalcluster/v2"
+
 	"github.com/kuadrant/kcp-glbc/pkg/migration/workload"
 	"github.com/kuadrant/kcp-glbc/pkg/reconciler"
+	"github.com/kuadrant/kcp-glbc/pkg/superClient"
 )
 
 const defaultControllerName = "kcp-glbc-deployment"
@@ -27,7 +28,7 @@ func NewController(config *ControllerConfig) (*Controller, error) {
 	queue := workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), controllerName)
 	c := &Controller{
 		Controller:            reconciler.NewController(controllerName, queue),
-		coreClient:            config.DeploymentClient,
+		superClient:           config.SuperClient,
 		sharedInformerFactory: config.SharedInformerFactory,
 	}
 	c.Process = c.process
@@ -48,14 +49,14 @@ func NewController(config *ControllerConfig) (*Controller, error) {
 
 type ControllerConfig struct {
 	*reconciler.ControllerConfig
-	DeploymentClient      kubernetes.ClusterInterface
+	SuperClient           superClient.Interface
 	SharedInformerFactory informers.SharedInformerFactory
 }
 
 type Controller struct {
 	*reconciler.Controller
 	sharedInformerFactory informers.SharedInformerFactory
-	coreClient            kubernetes.ClusterInterface
+	superClient           superClient.Interface
 	indexer               cache.Indexer
 	deploymentLister      appsv1listers.DeploymentLister
 	serviceLister         corev1listers.ServiceLister
@@ -82,7 +83,7 @@ func (c *Controller) process(ctx context.Context, key string) error {
 
 	// If the object being reconciled changed as a result, update it.
 	if !equality.Semantic.DeepEqual(target, current) {
-		_, err := c.coreClient.Cluster(logicalcluster.From(target)).AppsV1().Deployments(target.Namespace).Update(ctx, target, metav1.UpdateOptions{})
+		_, err := c.superClient.WorkspaceClient(logicalcluster.From(target)).AppsV1().Deployments(target.Namespace).Update(ctx, target, metav1.UpdateOptions{})
 		return err
 	}
 

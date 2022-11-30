@@ -1,0 +1,26 @@
+# Local deployment overlay.
+#
+# This requires the following .env files to exist in this directory before it can be used:
+# controller-config.env
+# aws-credentials.env
+#
+# These can be generated using `make generate-ld-config` and then modified as required.
+# `make generate-ld-config` creates configuration for the local dev environment so you must have ran `make local-setup` first.
+
+resources:
+  - ../../../default
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: controller-config
+    behavior: merge
+    envs:
+      - controller-config.env
+
+secretGenerator:
+  - name: aws-credentials
+    behavior: replace
+    envs:
+      - aws-credentials.env

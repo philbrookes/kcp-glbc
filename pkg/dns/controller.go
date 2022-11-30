@@ -12,10 +12,10 @@ import (
 	"github.com/kcp-dev/logicalcluster/v2"
 
 	v1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
-	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
 	"github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/informers/externalversions"
 	kuadrantv1lister "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/listers/kuadrant/v1"
 	"github.com/kuadrant/kcp-glbc/pkg/reconciler"
+	"github.com/kuadrant/kcp-glbc/pkg/superClient"
 )
 
 const defaultControllerName = "kcp-glbc-dns"
@@ -26,7 +26,7 @@ func NewController(config *ControllerConfig) (*Controller, error) {
 	queue := workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), controllerName)
 	c := &Controller{
 		Controller:            reconciler.NewController(controllerName, queue),
-		dnsRecordClient:       config.DnsRecordClient,
+		superClient:           config.SuperClient,
 		sharedInformerFactory: config.SharedInformerFactory,
 	}
 	c.Process = c.process
@@ -83,7 +83,7 @@ func NewController(config *ControllerConfig) (*Controller, error) {
 
 type ControllerConfig struct {
 	*reconciler.ControllerConfig
-	DnsRecordClient       kuadrantv1.ClusterInterface
+	SuperClient           superClient.Interface
 	SharedInformerFactory externalversions.SharedInformerFactory
 	DNSProvider           string
 }
@@ -91,7 +91,7 @@ type ControllerConfig struct {
 type Controller struct {
 	*reconciler.Controller
 	sharedInformerFactory externalversions.SharedInformerFactory
-	dnsRecordClient       kuadrantv1.ClusterInterface
+	superClient           superClient.Interface
 	indexer               cache.Indexer
 	lister                kuadrantv1lister.DNSRecordLister
 	dnsProvider           Provider
@@ -116,7 +116,7 @@ func (c *Controller) process(ctx context.Context, key string) error {
 	}
 
 	if !equality.Semantic.DeepEqual(previous.Status, current.Status) {
-		refresh, err := c.dnsRecordClient.Cluster(logicalcluster.From(current)).KuadrantV1().DNSRecords(current.Namespace).UpdateStatus(ctx, current, metav1.UpdateOptions{})
+		refresh, err := c.superClient.WorkspaceKuadrantClient(logicalcluster.From(current)).KuadrantV1().DNSRecords(current.Namespace).UpdateStatus(ctx, current, metav1.UpdateOptions{})
 		if err != nil {
 			return err
 		}
@@ -124,7 +124,7 @@ func (c *Controller) process(ctx context.Context, key string) error {
 	}
 
 	if !equality.Semantic.DeepEqual(previous, current) {
-		_, err := c.dnsRecordClient.Cluster(logicalcluster.From(current)).KuadrantV1().DNSRecords(current.Namespace).Update(ctx, current, metav1.UpdateOptions{})
+		_, err := c.superClient.WorkspaceKuadrantClient(logicalcluster.From(current)).KuadrantV1().DNSRecords(current.Namespace).Update(ctx, current, metav1.UpdateOptions{})
 		if err != nil {
 			return err
 		}

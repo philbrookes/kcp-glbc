@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	routev1 "github.com/openshift/api/route/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/cache"
 	"net"
 	"testing"
 
@@ -330,6 +333,48 @@ func Test_awsEndpointWeight(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := awsEndpointWeight(tt.args.numIPs); got != tt.want {
 				t.Errorf("awsEndpointWeight() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_objectKey(t *testing.T) {
+	type args struct {
+		obj runtime.Object
+	}
+	tests := []struct {
+		name string
+		args args
+		want cache.ExplicitKey
+	}{
+		{
+			name: "Ingress generated host",
+			args: args{
+				obj: Ingress{
+					Ingress: &networkingv1.Ingress{
+						ObjectMeta: metav1.ObjectMeta{Name: "echo"},
+					},
+				},
+			},
+			want: cache.ExplicitKey("echo"),
+		},
+		{
+			name: "Route generated host",
+			args: args{
+				obj: Route{
+					Route: &routev1.Route{
+						ObjectMeta: metav1.ObjectMeta{Name: "someObject"},
+					},
+				},
+			},
+			want: cache.ExplicitKey("someObject"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := objectKey(tt.args.obj); got != tt.want {
+				t.Errorf("objectKey() = %v, want %v", got, tt.want)
 			}
 		})
 	}

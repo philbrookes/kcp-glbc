@@ -139,8 +139,11 @@ func certificateReady(cert *certman.Certificate) bool {
 func CertificateName(accessor Interface) string {
 	// Removes chars which are invalid characters for cert manager certificate names. RFC 1123 subdomain must consist of
 	// lower case alphanumeric characters, '-' or '.', and must start and end with an alphanumeric character
-
-	return strings.ToLower(strings.ReplaceAll(fmt.Sprintf("%s-%s-%s-%s", logicalcluster.From(accessor), accessor.GetKind(), accessor.GetNamespace(), accessor.GetName()), ":", ""))
+	clusterName := logicalcluster.From(accessor)
+	if clusterName == logicalcluster.New("") {
+		clusterName = logicalcluster.New("k8s")
+	}
+	return strings.ToLower(strings.ReplaceAll(fmt.Sprintf("%s-%s-%s-%s", clusterName, accessor.GetKind(), accessor.GetNamespace(), accessor.GetName()), ":", ""))
 }
 
 // TLSSecretName returns the name for the secret in the end user namespace

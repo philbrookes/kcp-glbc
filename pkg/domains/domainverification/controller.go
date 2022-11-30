@@ -6,20 +6,20 @@ import (
 	"sync"
 	"time"
 
+	tenancyv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
 	"github.com/kcp-dev/logicalcluster/v2"
 
 	v1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
-	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
 	"github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/informers/externalversions"
 	kuadrantv1list "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/listers/kuadrant/v1"
 	"github.com/kuadrant/kcp-glbc/pkg/dns"
 	basereconciler "github.com/kuadrant/kcp-glbc/pkg/reconciler"
+	"github.com/kuadrant/kcp-glbc/pkg/superClient"
 )
 
 const (
@@ -34,19 +34,17 @@ func NewController(config *ControllerConfig) (*Controller, error) {
 	dnsVerifier := config.DNSVerifier
 	switch impl := dnsVerifier.(type) {
 	case *dns.ConfigMapHostResolver:
-		impl.Client = config.KubeClient
+		impl.Client = config.SuperClient.WorkspaceClient(tenancyv1alpha1.RootCluster)
 	}
 
 	dnsVerifier = NewSafeDNSVerifier(dnsVerifier)
 
 	queue := workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), controllerName)
 	c := &Controller{
-		Controller:               basereconciler.NewController(controllerName, queue),
-		KubeClient:               config.KubeClient,
-		KCPKubeClient:            config.KCPKubeClient,
-		domainVerificationClient: config.DomainVerificationClient,
-		sharedInformerFactory:    config.SharedInformerFactory,
-		dnsVerifier:              dnsVerifier,
+		Controller:            basereconciler.NewController(controllerName, queue),
+		superClient:           config.SuperClient,
+		sharedInformerFactory: config.SharedInformerFactory,
+		dnsVerifier:           dnsVerifier,
 	}
 	c.Process = c.process
 
@@ -66,21 +64,17 @@ type Controller struct {
 	*basereconciler.Controller
 	indexer                  cache.Indexer
 	domainVerificationLister kuadrantv1list.DomainVerificationLister
-	domainVerificationClient kuadrantv1.ClusterInterface
-	KCPKubeClient            kubernetes.ClusterInterface
-	KubeClient               kubernetes.Interface
+	superClient              superClient.Interface
 	sharedInformerFactory    externalversions.SharedInformerFactory
 	dnsVerifier              DNSVerifier
 }
 
 type ControllerConfig struct {
 	*basereconciler.ControllerConfig
-	KCPKubeClient            kubernetes.ClusterInterface
-	KubeClient               *kubernetes.Clientset
-	DomainVerificationClient kuadrantv1.ClusterInterface
-	SharedInformerFactory    externalversions.SharedInformerFactory
-	DNSVerifier              DNSVerifier
-	GLBCWorkspace            logicalcluster.Name
+	SuperClient           superClient.Interface
+	SharedInformerFactory externalversions.SharedInformerFactory
+	DNSVerifier           DNSVerifier
+	GLBCWorkspace         logicalcluster.Name
 }
 
 func (c *Controller) process(ctx context.Context, key string) error {
@@ -102,7 +96,7 @@ func (c *Controller) process(ctx context.Context, key string) error {
 	}
 
 	if !equality.Semantic.DeepEqual(previous.Status, current.Status) {
-		refresh, err := c.domainVerificationClient.Cluster(logicalcluster.From(current)).KuadrantV1().DomainVerifications().UpdateStatus(ctx, current, metav1.UpdateOptions{})
+		refresh, err := c.superClient.WorkspaceKuadrantClient(logicalcluster.From(current)).KuadrantV1().DomainVerifications().UpdateStatus(ctx, current, metav1.UpdateOptions{})
 		if err != nil {
 			return fmt.Errorf("could not update status: %v", err)
 		}
@@ -110,7 +104,7 @@ func (c *Controller) process(ctx context.Context, key string) error {
 	}
 
 	if !equality.Semantic.DeepEqual(previous, current) {
-		_, err := c.domainVerificationClient.Cluster(logicalcluster.From(current)).KuadrantV1().DomainVerifications().Update(ctx, current, metav1.UpdateOptions{})
+		_, err := c.superClient.WorkspaceKuadrantClient(logicalcluster.From(current)).KuadrantV1().DomainVerifications().Update(ctx, current, metav1.UpdateOptions{})
 		if err != nil {
 			return fmt.Errorf("could not update object: %v", err)
 		}
